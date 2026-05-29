@@ -1,3 +1,15 @@
+---
+title: "Project 11 - Hourly City Load Factor"
+author: "Maretti Filippo"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    theme: flatly
+    code_folding: show
+---
+
 ```{r install-packages, include=FALSE}
 pkgs <- c("tidyverse", "lubridate", "ggridges", "fitdistrplus")
 missing <- pkgs[!pkgs %in% rownames(installed.packages())]
@@ -112,7 +124,7 @@ peak hours the load factor reaches the upper clamping boundary.
 
 
 
-```{r hist-global, fig.cap=Empirical density of the load factor (n = 2000). The orange curve is the kernel density estimate.}
+```{r hist-global, fig.cap="Empirical density of the load factor (n = 2000). The orange curve is the kernel density estimate."}
 hist(lf$load_factor, breaks = 35, freq = FALSE,
      col = "tomato", border = "white",
      xlab = "Load factor (hourly load / daily peak)",
@@ -121,16 +133,17 @@ lines(density(lf$load_factor, from = 0.001, to = 0.999),
       col = "darkorange", lwd = 2)
 ```
 
-The histogram reveals a **clearly bimodal** (or trimodal) distribution:
+The histogram reveals a **clearly trimodal** distribution:
 
-- **Lower mode** (around LF ≈ 0.50–0.60): nighttime and early morning hours, when consumption
+- **Lower mode** (around LF ≈ 0.52–0.55): deep off-peak hours (pre-dawn), when consumption
   is far below the daily peak.
-- **Upper mode** (around LF ≈ 0.75–0.85): daytime and evening hours, when consumption
-  approaches the peak.
-- **Right tail** towards LF ≈ 0.999: hours that nearly coincide with the daily maximum.
+- **Middle mode** (around LF ≈ 0.72–0.75): daytime hours, when consumption reaches a
+  moderate plateau.
+- **Upper spike** near LF ≈ 0.999: the peak-hour observations, which by construction sit at
+  the daily maximum before clamping. This is a distinct third concentration, not a tail.
 
-This multimodality motivates the use of a **Beta mixture model** (Phase 2) rather than a
-single Beta distribution.
+This trimodality motivates the use of a **Beta mixture model** (Phase 2) rather than a
+single Beta distribution, and suggests $H = 3$ components as a plausible starting point.
 
 ---
 
@@ -142,7 +155,7 @@ single Beta distribution.
 
 
 
-```{r boxplot-hour, fig.cap=Load factor distribution by hour. Off-peak hours (2-6) vs. peak hours (10-13 and 19-22).}
+```{r boxplot-hour, fig.cap="Load factor distribution by hour. True off-peak valley at hours 4-7; evening peak (hours 19-21) dominates over midday plateau (hours 11-16)."}
 ggplot(lf, aes(x = factor(hour), y = load_factor)) +
   geom_boxplot(fill = "steelblue", alpha = 0.6, outlier.size = 0.8) +
   labs(
@@ -156,12 +169,17 @@ ggplot(lf, aes(x = factor(hour), y = load_factor)) +
 
 The daily pattern is clear:
 
-- **Off-peak hours** (roughly 2–6): low medians (~0.5–0.6) with little variability — all days
-  show low consumption in this window.
-- **Peak hours** (roughly 10–13 and 19–22): high medians (~0.80–0.90) with greater spread due
-  to seasonal variation (summer vs. winter).
-- The bimodal shape of the overall histogram directly reflects the separation between these
-  two time windows.
+- **Late night / early morning** (hours 0–3): moderate medians (~0.62–0.68) — these are
+  not the lowest hours; the city still consumes a significant fraction of its peak load.
+- **Deep off-peak valley** (hours 4–7): the true minimum, with medians ~0.52–0.53 and tight
+  IQRs — all days converge to very low consumption before dawn.
+- **Midday plateau** (hours 11–16): medians rise to ~0.73–0.77, forming a broad flat
+  shoulder in the daily profile.
+- **Dominant evening peak** (hours 19–21): medians jump to ~0.90–0.97, clearly the highest
+  window of the day. Hour 18 also shows exceptional spread (IQR spanning almost 0.70–0.97),
+  reflecting the sharp onset of the evening load surge.
+- The trimodal histogram arises from the superposition of these three regimes (off-peak /
+  midday plateau / evening peak).
 
 This hourly pattern will reappear in **Phase 3** (MAP component assignment as a function of
 hour) and **Phase 4** (multinomial logistic regression with Fourier-transformed hour as covariate).
@@ -176,7 +194,7 @@ hour) and **Phase 4** (multinomial logistic regression with Fourier-transformed 
 
 
 
-```{r ridgeline, fig.height=10, fig.cap=Load factor density for each of the 24 hours. Colour encodes the LF value.}
+```{r ridgeline, fig.height=10, fig.cap="Load factor density for each of the 24 hours. Colour encodes the LF value."}
 ggplot(lf, aes(x = load_factor, y = factor(hour), fill = after_stat(x))) +
   geom_density_ridges_gradient(scale = 1.8, rel_min_height = 0.01) +
   scale_fill_viridis_c(name = "LF", option = "C") +
@@ -190,11 +208,15 @@ ggplot(lf, aes(x = load_factor, y = factor(hour), fill = after_stat(x))) +
 
 The ridgeline plot shows how the **shape of the distribution changes with the hour**:
 
-- Nighttime hours (0–5) produce left-shifted, narrow distributions concentrated at low LF.
-- Daytime (8–13) and evening (18–22) hours show broader or bimodal distributions, with
-  density concentrated at high LF.
-- Transition hours (6–8, 14–17) exhibit flat or bimodal shapes, reflecting higher seasonal
-  variability.
+- **Hours 4–7**: the true off-peak block — very narrow, left-shifted peaks concentrated
+  at LF ≈ 0.52–0.55 with almost no spread. These are the most homogeneous hours.
+- **Hours 0–3**: moderate LF but with long right tails extending towards 1.0, indicating
+  that on some days (summer peak-demand evenings running past midnight) these hours
+  can still carry near-peak load. The distributions are bimodal or skewed.
+- **Hours 8–10**: broad transition distributions, reflecting the morning ramp-up.
+- **Hours 11–16**: fairly concentrated peaks at LF ≈ 0.73–0.77, forming the midday plateau.
+- **Hours 19–21**: extremely narrow, right-concentrated peaks near LF ≈ 0.95–0.99 —
+  the sharpest and most consistent regime in the dataset, corresponding to the evening peak.
 
 ---
 
@@ -206,7 +228,7 @@ The ridgeline plot shows how the **shape of the distribution changes with the ho
 
 
 
-```{r heatmap, fig.cap=Mean load factor by hour and month. Summer months (June-August) show higher consumption in afternoon hours (air conditioning peak).}
+```{r heatmap, fig.cap="Mean load factor by hour and month. Summer months (June-August) show higher consumption in afternoon hours (air conditioning peak)."}
 lf |>
   group_by(hour, month) |>
   summarise(mean_lf = mean(load_factor), .groups = "drop") |>
@@ -225,15 +247,19 @@ lf |>
   theme_minimal(base_size = 11)
 ```
 
-The heatmap highlights two overlapping effects:
+The heatmap highlights two effects:
 
-- **Daily cycle**: the vertical light/dark banding shows consistently low nighttime values
-  and high daytime values across all months.
-- **Summer seasonality**: June–August display higher values in the afternoon hours (12–17),
-  consistent with air-conditioning peaks in Tetouan's Mediterranean climate.
+- **Daily cycle (dominant)**: the horizontal banding is the strongest signal — a dark band
+  at hours 4–7 (deep off-peak, near LF ≈ 0.50) and a bright yellow-white band at hours
+  19–22 (evening peak, near LF ≈ 0.90+) run consistently across all 12 months.
+- **Seasonal modulation (subtle)**: there is a mild brightening of the afternoon block
+  (hours 12–17) in summer months (Jun–Aug), consistent with air-conditioning demand in
+  Tetouan's hot Mediterranean climate. However, the effect is modest compared to the daily
+  cycle. A notable anomalous warm cell appears in June at hours 0–2, likely a sampling
+  artifact from the 2000-row subsample rather than a genuine physical pattern.
 
 The Fourier-transformed hour covariates used in **Phase 4** are designed to capture exactly
-the 24-hour periodicity visible here.
+the 24-hour periodicity — the dominant structure visible here.
 
 ---
 
@@ -245,13 +271,13 @@ the 24-hour periodicity visible here.
 
 
 
-```{r fit-beta, fig.cap=MLE diagnostics for a single Beta fit. Systematic deviations in the QQ-plot motivate the mixture model.}
+```{r fit-beta, fig.cap="MLE diagnostics for a single Beta fit. Systematic deviations in the QQ-plot motivate the mixture model."}
 fit_beta <- fitdist(lf$load_factor, "beta")
 cat("MLE parameters: alpha =", round(fit_beta$estimate["shape1"], 3),
     "| beta =", round(fit_beta$estimate["shape2"], 3), "\n")
 plot(fit_beta)
 ```
-```{r beta-overlay, fig.cap=Empirical density vs. single Beta MLE. The single Beta cannot replicate the bimodality.}
+```{r beta-overlay, fig.cap="Empirical density vs. single Beta MLE. The single Beta cannot replicate the bimodality."}
 hist(lf$load_factor, breaks = 35, freq = FALSE,
      col = "grey85", border = "white",
      xlab = "Load factor",
@@ -269,10 +295,14 @@ legend("topleft",
 ```
 
 
-The single Beta produces a unimodal curve that **fails to capture the bimodality** observed
-in the data. Parameters $\alpha > 1$ and $\beta > 1$ enforce a bell-shaped form — symmetric
-or skewed — but cannot produce two distinct peaks. This limitation directly motivates a
-**Beta mixture model** with $H \geq 2$ components in Phase 2.
+The single Beta fit is dramatically inadequate. The MLE curve is **monotonically increasing**
+(J-shaped), concentrating density near LF = 1 — the optimizer trades off the lower modes
+entirely to accommodate the strong spike near 0.999. The empirical data, in contrast, shows
+three distinct concentrations. The QQ and PP plots confirm systematic deviation across the
+entire support. A single Beta cannot produce multiple peaks regardless of its parameters:
+with $\alpha > 1, \beta > 1$ it is bell-shaped; with $\beta < 1$ it is J-shaped (as here);
+neither can match a trimodal distribution. This motivates a **Beta mixture** with $H \geq 3$
+components in Phase 2.
 
 ---
 
@@ -280,11 +310,11 @@ or skewed — but cannot produce two distinct peaks. This limitation directly mo
 
 | Aspect | Finding |
 |---|---|
-| Overall distribution | Bimodal (lower mode ~0.55, upper mode ~0.80) |
-| Hourly pattern | Nighttime off-peak (hours 2–6) vs. daytime/evening peak |
-| Seasonality | Summer (Jun–Aug) more intense in afternoon hours |
-| Single Beta fit | Inadequate: fails to capture multimodality |
-| Mixture motivation | H = 2 or 3 components expected optimal (to be confirmed via WAIC in Phase 2) |
+| Overall distribution | Trimodal: off-peak ~0.52–0.55, midday plateau ~0.72–0.75, evening spike ~0.999 |
+| Hourly pattern | Valley hours 4–7; hours 0–3 moderate; midday plateau 11–16; evening peak 19–21 |
+| Seasonality | Daily cycle dominates; mild summer afternoon enhancement; anomaly in June hours 0–2 |
+| Single Beta fit | Fails dramatically: MLE yields a J-shaped curve, misses all three modes |
+| Mixture motivation | H = 3 components expected optimal (to be confirmed via WAIC in Phase 2) |
 
 The structure identified here directly informs the modelling choices in subsequent phases:
 
