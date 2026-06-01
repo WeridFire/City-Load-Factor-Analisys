@@ -1,14 +1,12 @@
 ---
-title: "Project 11 - Hourly City Load Factor"
-author: "Maretti Filippo"
-date: "`r Sys.Date()`"
-output:
-  html_document:
-    toc: true
-    toc_float: true
-    theme: flatly
-    code_folding: show
+editor_options: 
+  markdown: 
+    wrap: 72
 ---
+
+xz--- title: "Project 11 - Hourly City Load Factor" author: "Maretti
+Filippo" date: "`r Sys.Date()`" output: html_document: toc: true
+toc_float: true theme: flatly code_folding: show ---
 
 ```{r install-packages, include=FALSE}
 pkgs <- c("tidyverse", "lubridate", "ggridges", "fitdistrplus", "brms")
@@ -32,7 +30,10 @@ library(brms)
 
 ## Background and data source
 
-The dataset is derived from Salam & El Hibaoui, *Power Consumption of Tetouan City* (UCI Machine Learning Repository). The original data record the active power consumed every 10 minutes by the three distribution zones of Tetouan (Morocco) during 2017.
+The dataset is derived from Salam & El Hibaoui, *Power Consumption of
+Tetouan City* (UCI Machine Learning Repository). The original data
+record the active power consumed every 10 minutes by the three
+distribution zones of Tetouan (Morocco) during 2017.
 
 For each (day $d$, hour $h$) pair we define the **hourly load factor**:
 
@@ -40,9 +41,16 @@ $$
 \mathrm{LF}(d, h) = \frac{\overline{P}(d, h)}{\max_{h'} \overline{P}(d, h')}
 $$
 
-where $\overline{P}(d,h) = \text{Zone1}(d,h) + \text{Zone2}(d,h) + \text{Zone3}(d,h)$ is the city-wide hourly mean power. By construction $\mathrm{LF}(d,h) \in [0, 1]$: the daily peak hour equals exactly 1, while the deepest off-peak hour yields the smallest value.
+where
+$\overline{P}(d,h) = \text{Zone1}(d,h) + \text{Zone2}(d,h) + \text{Zone3}(d,h)$
+is the city-wide hourly mean power. By construction
+$\mathrm{LF}(d,h) \in [0, 1]$: the daily peak hour equals exactly 1,
+while the deepest off-peak hour yields the smallest value.
 
-From the full $365 \times 24 \approx 8700$ cells a uniform random subsample of **2000 rows** was drawn. Values are clamped to $(10^{-3},\, 1 - 10^{-3})$ so that the **Beta log-density is finite at the boundaries** — a requirement for Bayesian inference with Stan.
+From the full $365 \times 24 \approx 8700$ cells a uniform random
+subsample of **2000 rows** was drawn. Values are clamped to
+$(10^{-3},\, 1 - 10^{-3})$ so that the **Beta log-density is finite at
+the boundaries** — a requirement for Bayesian inference with Stan.
 
 ------------------------------------------------------------------------
 
@@ -70,7 +78,8 @@ cat("load_factor range: [", min(lf$load_factor), ",", max(lf$load_factor), "]\n"
 cat("Unique hours:", length(unique(lf$hour)), " (from", min(lf$hour), "to", max(lf$hour), ")\n")
 ```
 
-The dataset is complete: 2000 rows, no NA values, `load_factor` strictly inside $(10^{-3}, 1 - 10^{-3})$, `hour` in $\{0, \ldots, 23\}$.
+The dataset is complete: 2000 rows, no NA values, `load_factor` strictly
+inside $(10^{-3}, 1 - 10^{-3})$, `hour` in $\{0, \ldots, 23\}$.
 
 ------------------------------------------------------------------------
 
@@ -91,7 +100,10 @@ lf |>
   knitr::kable(caption = "Descriptive statistics of the load factor (n = 2000)")
 ```
 
-The distribution is left-skewed (median \> mean), with the lower tail corresponding to nighttime off-peak hours. The effective range (\~0.43–0.999) is wide, indicating that at peak hours the load factor reaches the upper clamping boundary.
+The distribution is left-skewed (median \> mean), with the lower tail
+corresponding to nighttime off-peak hours. The effective range
+(\~0.43–0.999) is wide, indicating that at peak hours the load factor
+reaches the upper clamping boundary.
 
 ------------------------------------------------------------------------
 
@@ -108,11 +120,17 @@ lines(density(lf$load_factor, from = 0.001, to = 0.999),
 
 The histogram reveals a **clearly trimodal** distribution:
 
--   **Lower mode** (around LF ≈ 0.52–0.55): deep off-peak hours (pre-dawn), when consumption is far below the daily peak.
--   **Middle mode** (around LF ≈ 0.72–0.75): daytime hours, when consumption reaches a moderate plateau.
--   **Upper spike** near LF ≈ 0.999: the peak-hour observations, which by construction sit at the daily maximum before clamping. This is a distinct third concentration, not a tail.
+-   **Lower mode** (around LF ≈ 0.52–0.55): deep off-peak hours
+    (pre-dawn), when consumption is far below the daily peak.
+-   **Middle mode** (around LF ≈ 0.72–0.75): daytime hours, when
+    consumption reaches a moderate plateau.
+-   **Upper spike** near LF ≈ 0.999: the peak-hour observations, which
+    by construction sit at the daily maximum before clamping. This is a
+    distinct third concentration, not a tail.
 
-This trimodality motivates the use of a **Beta mixture model** (Phase 2) rather than a single Beta distribution, and suggests $H = 3$ components as a plausible starting point.
+This trimodality motivates the use of a **Beta mixture model** (Phase 2)
+rather than a single Beta distribution, and suggests $H = 3$ components
+as a plausible starting point.
 
 ------------------------------------------------------------------------
 
@@ -134,13 +152,24 @@ ggplot(lf, aes(x = factor(hour), y = load_factor)) +
 
 The daily pattern is clear:
 
--   **Late night / early morning** (hours 0–3): moderate medians (\~0.62–0.68) — these are not the lowest hours; the city still consumes a significant fraction of its peak load.
--   **Deep off-peak valley** (hours 4–7): the true minimum, with medians \~0.52–0.53 and tight IQRs — all days converge to very low consumption before dawn.
--   **Midday plateau** (hours 11–16): medians rise to \~0.73–0.77, forming a broad flat shoulder in the daily profile.
--   **Dominant evening peak** (hours 19–21): medians jump to \~0.90–0.97, clearly the highest window of the day. Hour 18 also shows exceptional spread (IQR spanning almost 0.70–0.97), reflecting the sharp onset of the evening load surge.
--   The trimodal histogram arises from the superposition of these three regimes (off-peak / midday plateau / evening peak).
+-   **Late night / early morning** (hours 0–3): moderate medians
+    (\~0.62–0.68) — these are not the lowest hours; the city still
+    consumes a significant fraction of its peak load.
+-   **Deep off-peak valley** (hours 4–7): the true minimum, with medians
+    \~0.52–0.53 and tight IQRs — all days converge to very low
+    consumption before dawn.
+-   **Midday plateau** (hours 11–16): medians rise to \~0.73–0.77,
+    forming a broad flat shoulder in the daily profile.
+-   **Dominant evening peak** (hours 19–21): medians jump to
+    \~0.90–0.97, clearly the highest window of the day. Hour 18 also
+    shows exceptional spread (IQR spanning almost 0.70–0.97), reflecting
+    the sharp onset of the evening load surge.
+-   The trimodal histogram arises from the superposition of these three
+    regimes (off-peak / midday plateau / evening peak).
 
-This hourly pattern will reappear in **Phase 3** (MAP component assignment as a function of hour) and **Phase 4** (multinomial logistic regression with Fourier-transformed hour as covariate).
+This hourly pattern will reappear in **Phase 3** (MAP component
+assignment as a function of hour) and **Phase 4** (multinomial logistic
+regression with Fourier-transformed hour as covariate).
 
 ------------------------------------------------------------------------
 
@@ -158,13 +187,23 @@ ggplot(lf, aes(x = load_factor, y = factor(hour), fill = after_stat(x))) +
   theme_ridges(grid = TRUE)
 ```
 
-The ridgeline plot shows how the **shape of the distribution changes with the hour**:
+The ridgeline plot shows how the **shape of the distribution changes
+with the hour**:
 
--   **Hours 4–7**: the true off-peak block — very narrow, left-shifted peaks concentrated at LF ≈ 0.52–0.55 with almost no spread. These are the most homogeneous hours.
--   **Hours 0–3**: moderate LF but with long right tails extending towards 1.0, indicating that on some days (summer peak-demand evenings running past midnight) these hours can still carry near-peak load. The distributions are bimodal or skewed.
--   **Hours 8–10**: broad transition distributions, reflecting the morning ramp-up.
--   **Hours 11–16**: fairly concentrated peaks at LF ≈ 0.73–0.77, forming the midday plateau.
--   **Hours 19–21**: extremely narrow, right-concentrated peaks near LF ≈ 0.95–0.99 — the sharpest and most consistent regime in the dataset, corresponding to the evening peak.
+-   **Hours 4–7**: the true off-peak block — very narrow, left-shifted
+    peaks concentrated at LF ≈ 0.52–0.55 with almost no spread. These
+    are the most homogeneous hours.
+-   **Hours 0–3**: moderate LF but with long right tails extending
+    towards 1.0, indicating that on some days (summer peak-demand
+    evenings running past midnight) these hours can still carry
+    near-peak load. The distributions are bimodal or skewed.
+-   **Hours 8–10**: broad transition distributions, reflecting the
+    morning ramp-up.
+-   **Hours 11–16**: fairly concentrated peaks at LF ≈ 0.73–0.77,
+    forming the midday plateau.
+-   **Hours 19–21**: extremely narrow, right-concentrated peaks near LF
+    ≈ 0.95–0.99 — the sharpest and most consistent regime in the
+    dataset, corresponding to the evening peak.
 
 ------------------------------------------------------------------------
 
@@ -191,10 +230,21 @@ lf |>
 
 The heatmap highlights two effects:
 
--   **Daily cycle (dominant)**: the horizontal banding is the strongest signal — a dark band at hours 4–7 (deep off-peak, near LF ≈ 0.50) and a bright yellow-white band at hours 19–22 (evening peak, near LF ≈ 0.90+) run consistently across all 12 months.
--   **Seasonal modulation (subtle)**: there is a mild brightening of the afternoon block (hours 12–17) in summer months (Jun–Aug), consistent with air-conditioning demand in Tetouan's hot Mediterranean climate. However, the effect is modest compared to the daily cycle. A notable anomalous warm cell appears in June at hours 0–2, likely a sampling artifact from the 2000-row subsample rather than a genuine physical pattern.
+-   **Daily cycle (dominant)**: the horizontal banding is the strongest
+    signal — a dark band at hours 4–7 (deep off-peak, near LF ≈ 0.50)
+    and a bright yellow-white band at hours 19–22 (evening peak, near LF
+    ≈ 0.90+) run consistently across all 12 months.
+-   **Seasonal modulation (subtle)**: there is a mild brightening of the
+    afternoon block (hours 12–17) in summer months (Jun–Aug), consistent
+    with air-conditioning demand in Tetouan's hot Mediterranean climate.
+    However, the effect is modest compared to the daily cycle. A notable
+    anomalous warm cell appears in June at hours 0–2, likely a sampling
+    artifact from the 2000-row subsample rather than a genuine physical
+    pattern.
 
-The Fourier-transformed hour covariates used in **Phase 4** are designed to capture exactly the 24-hour periodicity — the dominant structure visible here.
+The Fourier-transformed hour covariates used in **Phase 4** are designed
+to capture exactly the 24-hour periodicity — the dominant structure
+visible here.
 
 ------------------------------------------------------------------------
 
@@ -224,7 +274,16 @@ legend("topleft",
        lty    = c(2, 1), lwd = 2, bty = "n")
 ```
 
-The single Beta fit is dramatically inadequate. The MLE curve is **monotonically increasing** (J-shaped), concentrating density near LF = 1 — the optimizer trades off the lower modes entirely to accommodate the strong spike near 0.999. The empirical data, in contrast, shows three distinct concentrations. The QQ and PP plots confirm systematic deviation across the entire support. A single Beta cannot produce multiple peaks regardless of its parameters: with $\alpha > 1, \beta > 1$ it is bell-shaped; with $\beta < 1$ it is J-shaped (as here); neither can match a trimodal distribution. This motivates a **Beta mixture** with $H \geq 3$ components in Phase 2.
+The single Beta fit is dramatically inadequate. The MLE curve is
+**monotonically increasing** (J-shaped), concentrating density near LF =
+1 — the optimizer trades off the lower modes entirely to accommodate the
+strong spike near 0.999. The empirical data, in contrast, shows three
+distinct concentrations. The QQ and PP plots confirm systematic
+deviation across the entire support. A single Beta cannot produce
+multiple peaks regardless of its parameters: with
+$\alpha > 1, \beta > 1$ it is bell-shaped; with $\beta < 1$ it is
+J-shaped (as here); neither can match a trimodal distribution. This
+motivates a **Beta mixture** with $H \geq 3$ components in Phase 2.
 
 ------------------------------------------------------------------------
 
@@ -274,9 +333,35 @@ fit_h5 <- brm(
   chains = 4, iter = 2000, seed = 42
 )
 fit_h5 <- add_criterion(fit_h5, "waic")
+```
 
+```{r}
 model_comparison <- loo_compare(fit_h1, fit_h2, fit_h3, fit_h4, fit_h5, criterion = "waic")
 print(model_comparison)
+```
+
+```{r}
+pp_check(fit_h1, ndraws = 100) + 
+  labs(title = "Model H=1",
+       subtitle = "Dark line = real data, Light line = model")
+```
+
+```{r}
+pp_check(fit_h2, ndraws = 100) + 
+  labs(title = "Model H=2",
+       subtitle = "Dark line = real data, Light line = model")
+```
+
+```{r}
+pp_check(fit_h3, ndraws = 100) + 
+  labs(title = "Model H=3",
+       subtitle = "Dark line = real data, Light line = model")
+```
+
+```{r}
+pp_check(fit_h4, ndraws = 100) + 
+  labs(title = "Model H=4",
+       subtitle = "Dark line = real data, Light line = model")
 ```
 
 ```{r}
@@ -285,7 +370,19 @@ pp_check(fit_h5, ndraws = 100) +
        subtitle = "Dark line = real data, Light line = model")
 ```
 
-Model selection using the WAIC criterion yielded a counterintuitive result compared to pure visual inspection. Although the empirical histogram suggests a trimodal structure ($H=3$), the 5-component mixture model ($H=5$) proves to be vastly superior, showing a highly significant predictive difference (elpd_diff = -50.2) compared to the $H=4$ model (se_diff = 6.3).This discrepancy suggests that the individual peaks (modes) present in the data possess complex asymmetry or tail behavior that a single Beta distribution cannot adequately parameterize. Consequently, the Bayesian process utilizes the additional mixture components not to identify new, isolated data clusters, but rather to correct and refine the shape of the individual empirical distributions. This ensures a significantly superior fit, ultimately justifying the penalty introduced by the WAIC for the higher parametric complexity.
+Model selection using the WAIC criterion yielded a counterintuitive
+result compared to pure visual inspection. Although the empirical
+histogram suggests a trimodal structure ($H=3$), the 5-component mixture
+model ($H=5$) proves to be vastly superior, showing a highly significant
+predictive difference (elpd_diff = -50.2) compared to the $H=4$ model
+(se_diff = 6.3).This discrepancy suggests that the individual peaks
+(modes) present in the data possess complex asymmetry or tail behavior
+that a single Beta distribution cannot adequately parameterize.
+Consequently, the Bayesian process utilizes the additional mixture
+components not to identify new, isolated data clusters, but rather to
+correct and refine the shape of the individual empirical distributions.
+This ensures a significantly superior fit, ultimately justifying the
+penalty introduced by the WAIC for the higher parametric complexity.
 
 ------------------------------------------------------------------------
 
@@ -299,8 +396,13 @@ Model selection using the WAIC criterion yielded a counterintuitive result compa
 | Single Beta fit | Fails dramatically: MLE yields a J-shaped curve, misses all three modes |
 | Mixture motivation | H = 3 components expected optimal (to be confirmed via WAIC in Phase 2) |
 
-The structure identified here directly informs the modelling choices in subsequent phases:
+The structure identified here directly informs the modelling choices in
+subsequent phases:
 
--   **Phase 2**: Beta mixture with $H \in \{1,\ldots,5\}$, model selection via WAIC
--   **Phase 3**: MAP assignment — mixture components correspond to hourly regimes (off-peak / peak)
--   **Phase 4**: multinomial logistic regression with covariates $\sin(k \cdot 2\pi h / 24)$, $\cos(k \cdot 2\pi h / 24)$ to capture the daily periodicity
+-   **Phase 2**: Beta mixture with $H \in \{1,\ldots,5\}$, model
+    selection via WAIC
+-   **Phase 3**: MAP assignment — mixture components correspond to
+    hourly regimes (off-peak / peak)
+-   **Phase 4**: multinomial logistic regression with covariates
+    $\sin(k \cdot 2\pi h / 24)$, $\cos(k \cdot 2\pi h / 24)$ to capture
+    the daily periodicity
