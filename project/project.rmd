@@ -289,7 +289,7 @@ motivates a **Beta mixture** with $H \geq 3$ components in Phase 2.
 
 ## 8. Model selection with WAIC for beta mixtures
 
-```{r}
+```{r, eval=FALSE}
 cat("Estimate for the single beta model (H=1)...\n")
 
 fit_h1 <- brm(
@@ -336,38 +336,35 @@ fit_h5 <- add_criterion(fit_h5, "waic")
 ```
 
 ```{r}
+
+fit_h1 <- readRDS("modello_H1.rds")
+fit_h2 <- readRDS("modello_H2.rds")
+fit_h3 <- readRDS("modello_H3.rds")
+fit_h4 <- readRDS("modello_H4.rds")
+fit_h5 <- readRDS("modello_H5.rds")
+
 model_comparison <- loo_compare(fit_h1, fit_h2, fit_h3, fit_h4, fit_h5, criterion = "waic")
 print(model_comparison)
 ```
 
 ```{r}
-pp_check(fit_h1, ndraws = 100) + 
-  labs(title = "Model H=1",
-       subtitle = "Dark line = real data, Light line = model")
-```
+library(brms)
+library(ggplot2)
+library(gridExtra)
 
-```{r}
-pp_check(fit_h2, ndraws = 100) + 
-  labs(title = "Model H=2",
-       subtitle = "Dark line = real data, Light line = model")
-```
+fit_h1 <- readRDS("modello_H1.rds")
+fit_h2 <- readRDS("modello_H2.rds")
+fit_h3 <- readRDS("modello_H3.rds")
+fit_h4 <- readRDS("modello_H4.rds")
+fit_h5 <- readRDS("modello_H5.rds")
 
-```{r}
-pp_check(fit_h3, ndraws = 100) + 
-  labs(title = "Model H=3",
-       subtitle = "Dark line = real data, Light line = model")
-```
+p1 <- pp_check(fit_h1, ndraws = 100) + labs(title = "Model H=1 (Single Beta)")
+p2 <- pp_check(fit_h2, ndraws = 100) + labs(title = "Model H=2 (Mixture)")
+p3 <- pp_check(fit_h3, ndraws = 100) + labs(title = "Model H=3 (Mixture)")
+p4 <- pp_check(fit_h4, ndraws = 100) + labs(title = "Model H=4 (Mixture)")
+p5 <- pp_check(fit_h5, ndraws = 100) + labs(title = "Model H=5 (Mixture)")
 
-```{r}
-pp_check(fit_h4, ndraws = 100) + 
-  labs(title = "Model H=4",
-       subtitle = "Dark line = real data, Light line = model")
-```
-
-```{r}
-pp_check(fit_h5, ndraws = 100) + 
-  labs(title = "Model H=5",
-       subtitle = "Dark line = real data, Light line = model")
+grid.arrange(p1, p2, p3, p4, p5, ncol = 2)
 ```
 
 Model selection using the WAIC criterion yielded a counterintuitive
