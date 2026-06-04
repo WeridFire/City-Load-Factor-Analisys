@@ -290,7 +290,7 @@ motivates a **Beta mixture** with $H \geq 3$ components in Phase 2.
 ## Phase 1 summary
 
 | Aspect | Finding |
-|----|----|
+|------------------------------------|------------------------------------|
 | Overall distribution | Trimodal: off-peak \~0.52–0.55, midday plateau \~0.72–0.75, evening spike \~0.999 |
 | Hourly pattern | Valley hours 4–7; hours 0–3 moderate; midday plateau 11–16; evening peak 19–21 |
 | Seasonality | Daily cycle dominates; mild summer afternoon enhancement; anomaly in June hours 0–2 |
@@ -379,7 +379,9 @@ fit_h3 <- readRDS("modello_H3.rds")
 fit_h5 <- readRDS("modello_H5.rds")
 
 p1 <- pp_check(fit_h1, ndraws = 100) + labs(title = "Model H=1 (Single Beta)")
+p2 <- pp_check(fit_h2, ndraws = 100) + labs(title = "Model H=2 (Mixture)")
 p3 <- pp_check(fit_h3, ndraws = 100) + labs(title = "Model H=3 (Mixture)")
+p4 <- pp_check(fit_h4, ndraws = 100) + labs(title = "Model H=4 (Mixture)")
 p5 <- pp_check(fit_h5, ndraws = 100) + labs(title = "Model H=5 (Mixture)")
 
 grid.arrange(p1, p3, p5, ncol = 1)
