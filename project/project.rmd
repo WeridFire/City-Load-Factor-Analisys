@@ -375,7 +375,9 @@ library(ggplot2)
 library(gridExtra)
 
 fit_h1 <- readRDS("modello_H1.rds")
+fit_h2 <- readRDS("modello_H2.rds")
 fit_h3 <- readRDS("modello_H3.rds")
+fit_h4 <- readRDS("modello_H4.rds")
 fit_h5 <- readRDS("modello_H5.rds")
 
 p1 <- pp_check(fit_h1, ndraws = 100) + labs(title = "Model H=1 (Single Beta)")
@@ -384,7 +386,12 @@ p3 <- pp_check(fit_h3, ndraws = 100) + labs(title = "Model H=3 (Mixture)")
 p4 <- pp_check(fit_h4, ndraws = 100) + labs(title = "Model H=4 (Mixture)")
 p5 <- pp_check(fit_h5, ndraws = 100) + labs(title = "Model H=5 (Mixture)")
 
-grid.arrange(p1, p3, p5, ncol = 1)
+p1
+p2
+p3
+p4
+p5
+
 ```
 
 Model selection using the WAIC criterion yielded a counterintuitive
