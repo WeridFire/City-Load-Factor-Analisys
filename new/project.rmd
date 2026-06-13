@@ -199,25 +199,28 @@ all unknown parameters:
 
 ## CODE
 
-First we import data and take 400 random lines to not make computation
-too heavy for test enviroment.
+Importiamo i dati. Per la run *finale* usiamo tutti i 2000 dati; per i
+test rapidi basta mettere `use_subsample <- TRUE` (così non ci mettiamo
+ore a runnare). Fissiamo il seed per riproducibilità e teniamo `hour`
+allineato a `my_data` (servirà per il clustering su z).
 
 ```{r}
-# Assegniamo la colonna di interesse alla variabile usata nel loop
-my_data <- lf$load_factor
+set.seed(123)
 
-# TRUCCO FONDAMENTALE PER JAGS:
-# La distribuzione Beta in JAGS va in errore se incontra valori ESATTAMENTE 
-# pari a 0 o pari a 1 (log(0) è indefinito). 
-# Questa riga schiaccia impercettibilmente i valori estremi a 0.000001 e 0.999999
-my_data <- pmax(pmin(my_data, 1 - 1e-6), 1e-6)
-N <- length(my_data)
-```
+use_subsample <- TRUE   # TRUE per test rapidi, FALSE per la run finale
+n_sub <- 400
 
-```{r}
-# Subsample 400 righe a caso in input per non metterci ore a runnare
-my_data <- sample(lf$load_factor, 400)
-my_data <- pmax(pmin(my_data, 1 - 1e-6), 1e-6)
+if (use_subsample) {
+  idx <- sample(seq_len(nrow(lf)), n_sub)
+} else {
+  idx <- seq_len(nrow(lf))
+}
+lf_fit <- lf[idx, ]                 # sottoinsieme usato per il fit (con 'hour')
+
+# TRUCCO PER JAGS:
+# La Beta non è definita esattamente in 0 o 1 (log(0) è indefinito).
+# Schiacciamo impercettibilmente i valori estremi appena dentro (0, 1).
+my_data <- pmax(pmin(lf_fit$load_factor, 1 - 1e-6), 1e-6)
 N <- length(my_data)
 ```
 
@@ -237,8 +240,6 @@ distribution.
     Specifically, a symmetric Dirichlet prior is placed on the mixture
     weights $\boldsymbol{\pi}$ to ensure they sum up to 1.
 
-<!-- -->
-
 -   For the shape parameters $\alpha_h$ and $\beta_h$, we use
     Exponential priors with a small rate parameter ($\lambda = 0.1$).
     This choice ensures the parameters remain strictly positive while
@@ -249,6 +250,7 @@ jags_model_H1 <- "
 model {
   for (i in 1:N) {
     x[i] ~ dbeta(alpha, beta)
+    # Con un solo componente la log-lik marginale = la log-densita' Beta.
     log_lik[i] <- logdensity.beta(x[i], alpha, beta)
   }
   alpha ~ dexp(0.1)
@@ -262,11 +264,22 @@ model {
   for (i in 1:N) {
     z[i] ~ dcat(pi_weights[1:H])
     x[i] ~ dbeta(alpha[z[i]], beta[z[i]])
-    log_lik[i] <- logdensity.beta(x[i], alpha[z[i]], beta[z[i]])
+
+    # Log-lik MARGINALE per WAIC/LOO: log sum_h pi_h * Beta(x_i | a_h, b_h),
+    # con la latente z integrata via. Calcolata con log-sum-exp per stabilita'
+    # numerica (exp/log/max sono funzioni scalari in JAGS).
+    for (h in 1:H) {
+      lcomp[i, h] <- log(pi_weights[h]) + logdensity.beta(x[i], alpha[h], beta[h])
+    }
+    mx[i] <- max(lcomp[i, 1:H])
+    for (h in 1:H) {
+      e[i, h] <- exp(lcomp[i, h] - mx[i])
+    }
+    log_lik[i] <- mx[i] + log(sum(e[i, 1:H]))
   }
   # Uninformative Dirichlet prior for mixture weights
   pi_weights[1:H] ~ ddirch(ones[1:H])
-  
+
   # Weakly informative Exponential priors for shape parameters
   for (h in 1:H) {
     alpha[h] ~ dexp(0.1)
@@ -276,21 +289,31 @@ model {
 "
 ```
 
-Helper usefoul for later
+Helper per il WAIC.
+
+**Punto chiave.** Per una mistura il WAIC va calcolato sulla likelihood
+**marginale** dell'osservazione, integrando via la latente $z$: $$
+\log p(x_i \mid \theta^{(s)}) = \log \sum_{h=1}^H \pi_h^{(s)}\,\text{Beta}(x_i \mid \alpha_h^{(s)}, \beta_h^{(s)}).
+$$ Usare invece la log-densità *condizionata* alla $z_i$ pescata a quel
+passo ($\log\text{Beta}(x_i\mid\alpha_{z_i},\beta_{z_i})$) risponde a
+un'altra domanda predittiva, gonfia $p_{\text{WAIC}}$ e premia troppi
+componenti. Come nel lab `03_mixtures`, calcoliamo `log_lik[i]` **dentro
+JAGS** con il trucco log-sum-exp (stabile numericamente) e lo
+monitoriamo; qui l'helper si limita a impilare i campioni nella forma
+$[S \times N]$ che `loo::waic` si aspetta. Vantaggio collaterale: la
+densità marginale è invariante per permutazione delle etichette, quindi
+questo WAIC è **immune al label switching**.
 
 ```{r}
-# 2. Helper function to compute WAIC from JAGS posterior samples
-compute_waic_from_samples <- function(loglik_samples, num_data) {
-  # Permute dimensions from [N, Iterations, Chains] to [Iterations, Chains, N]
-  log_lik_permuted <- aperm(loglik_samples, c(2, 3, 1))
-  
-  # Flatten iterations and chains into a single "samples" dimension
-  tot_samples <- dim(log_lik_permuted)[1] * dim(log_lik_permuted)[2]
-  log_lik_matrix <- matrix(log_lik_permuted, nrow = tot_samples, ncol = num_data)
-  
-  # Compute WAIC using the loo package
-  waic_obj <- waic(log_lik_matrix)
-  return(waic_obj$estimates["waic", "Estimate"])
+# Riformatta la log_lik monitorata da jags.samples (mcarray [N, iter, chains])
+# nella matrice [S, N] richiesta da loo::waic, poi restituisce il WAIC.
+compute_waic_from_loglik <- function(loglik_samples) {
+  # [N, iter, chains] -> [iter, chains, N]
+  ll <- aperm(loglik_samples, c(2, 3, 1))
+  S  <- dim(ll)[1] * dim(ll)[2]       # iter * chains
+  n  <- dim(ll)[3]
+  ll_mat <- matrix(ll, nrow = S, ncol = n)
+  waic(ll_mat)$estimates["waic", "Estimate"]
 }
 ```
 
@@ -323,7 +346,7 @@ update(model_H1, n.iter = 1000)
 # Posterior sampling
 samples_H1 <- jags.samples(model_H1, variable.names = c("alpha", "beta", "log_lik"), n.iter = 2000)
 
-waic_H1 <- compute_waic_from_samples(samples_H1$log_lik, N)
+waic_H1 <- compute_waic_from_loglik(samples_H1$log_lik)
 cat("WAIC for H = 1:", waic_H1, "\n")
 ```
 
@@ -336,9 +359,9 @@ jags_data_H2 <- list(x = my_data, N = N, H = 2, ones = rep(1, 2))
 model_H2 <- jags.model(textConnection(jags_model_mix), data = jags_data_H2, n.chains = 2, quiet = TRUE)
 
 update(model_H2, n.iter = 1000)
-samples_H2 <- jags.samples(model_H2, variable.names = c("pi_weights", "alpha", "beta", "log_lik"), n.iter = 2000)
+samples_H2 <- jags.samples(model_H2, variable.names = c("pi_weights", "alpha", "beta", "z", "log_lik"), n.iter = 2000)
 
-waic_H2 <- compute_waic_from_samples(samples_H2$log_lik, N)
+waic_H2 <- compute_waic_from_loglik(samples_H2$log_lik)
 cat("WAIC for H = 2:", waic_H2, "\n")
 ```
 
@@ -351,9 +374,9 @@ jags_data_H3 <- list(x = my_data, N = N, H = 3, ones = rep(1, 3))
 model_H3 <- jags.model(textConnection(jags_model_mix), data = jags_data_H3, n.chains = 2, quiet = TRUE)
 
 update(model_H3, n.iter = 1000)
-samples_H3 <- jags.samples(model_H3, variable.names = c("pi_weights", "alpha", "beta", "log_lik"), n.iter = 2000)
+samples_H3 <- jags.samples(model_H3, variable.names = c("pi_weights", "alpha", "beta", "z", "log_lik"), n.iter = 2000)
 
-waic_H3 <- compute_waic_from_samples(samples_H3$log_lik, N)
+waic_H3 <- compute_waic_from_loglik(samples_H3$log_lik)
 cat("WAIC for H = 3:", waic_H3, "\n")
 ```
 
@@ -366,9 +389,9 @@ jags_data_H4 <- list(x = my_data, N = N, H = 4, ones = rep(1, 4))
 model_H4 <- jags.model(textConnection(jags_model_mix), data = jags_data_H4, n.chains = 2, quiet = TRUE)
 
 update(model_H4, n.iter = 1000)
-samples_H4 <- jags.samples(model_H4, variable.names = c("pi_weights", "alpha", "beta", "log_lik"), n.iter = 2000)
+samples_H4 <- jags.samples(model_H4, variable.names = c("pi_weights", "alpha", "beta", "z", "log_lik"), n.iter = 2000)
 
-waic_H4 <- compute_waic_from_samples(samples_H4$log_lik, N)
+waic_H4 <- compute_waic_from_loglik(samples_H4$log_lik)
 cat("WAIC for H = 4:", waic_H4, "\n")
 ```
 
@@ -381,9 +404,9 @@ jags_data_H5 <- list(x = my_data, N = N, H = 5, ones = rep(1, 5))
 model_H5 <- jags.model(textConnection(jags_model_mix), data = jags_data_H5, n.chains = 2, quiet = TRUE)
 
 update(model_H5, n.iter = 1000)
-samples_H5 <- jags.samples(model_H5, variable.names = c("pi_weights", "alpha", "beta", "log_lik"), n.iter = 2000)
+samples_H5 <- jags.samples(model_H5, variable.names = c("pi_weights", "alpha", "beta", "z", "log_lik"), n.iter = 2000)
 
-waic_H5 <- compute_waic_from_samples(samples_H5$log_lik, N)
+waic_H5 <- compute_waic_from_loglik(samples_H5$log_lik)
 cat("WAIC for H = 5:", waic_H5, "\n")
 ```
 
@@ -594,7 +617,7 @@ final_overall_mixture <- colSums(final_components)
 hist(my_data, breaks = 40, freq = FALSE,
      col = "tomato", border = "white",
      xlab = "Load factor (hourly / daily peak)",
-     main = paste("Label-Switching Proof Anatomy (H =", best_H +1, ")"))
+     main = paste("Label-Switching Proof Anatomy (H =", best_H, ")"))
 
 # Draw the individual sorted components (dashed lines)
 colors_for_components <- c("black", "darkgreen", "purple", "darkorange", "brown")
@@ -622,143 +645,153 @@ legend("topright",
        cex = 0.9)
 ```
 
-Now The professor during the meeting also talked about clustering over
-Z:\
+single distr visualization:\
 
 ```{r}
-# ==============================================================================
-# BLOCK 11: MODEL-BASED CLUSTERING (Assegnazione dei Dati ai Cluster)
-# ==============================================================================
+# ---- Componenti Beta separati, con i loro valori --------------------------
+best_samples <- all_samples[[best_H]]
 
-# Creiamo una matrice per salvare le probabilità che il dato 'i' appartenga al cluster 'h'
-# Dimensioni: [Numero di Dati (2000) x Numero di Componenti (best_H)]
-prob_appartenenza <- matrix(0, nrow = N, ncol = best_H)
+# Parametri come matrici [H, S]  (S = iterazioni * catene)
+pi_mat    <- matrix(best_samples$pi_weights, nrow = best_H)
+alpha_mat <- matrix(best_samples$alpha,      nrow = best_H)
+beta_mat  <- matrix(best_samples$beta,       nrow = best_H)
+S_tot     <- ncol(pi_mat)
 
-cat("Calcolo delle probabilità di clustering Bayesiano...\n")
-
-# Usiamo lo stesso trucco del riordino per proteggerci dal Label Switching
-for (s in 1:S_totale) {
-  
-  # 1. Troviamo l'ordine corretto delle componenti (da sinistra a destra)
-  beta_means <- alpha_mat[, s] / (alpha_mat[, s] + beta_mat[, s])
-  ordered_indices <- order(beta_means)
-  
-  # Matrice temporanea per i calcoli di questo specifico step MCMC
-  num_mat <- matrix(0, nrow = N, ncol = best_H)
-  denominatore <- rep(0, N)
-  
-  # 2. Per ogni componente ordinata, calcoliamo la "forza di attrazione" sui 2000 dati
-  for (h in 1:best_H) {
-    idx <- ordered_indices[h]
-    
-    # Teorema di Bayes (Numeratore): Peso * Densità Beta per TUTTI i 2000 dati
-    num_mat[, h] <- pi_mat[idx, s] * dbeta(my_data, alpha_mat[idx, s], beta_mat[idx, s])
-    denominatore <- denominatore + num_mat[, h]
-  }
-  
-  # Teorema di Bayes: Probabilità = Numeratore / Denominatore
-  prob_step <- num_mat / denominatore
-  
-  # Sommiamo per poi fare la media alla fine
-  prob_appartenenza <- prob_appartenenza + prob_step
+# Relabel di ogni draw per media crescente -> componenti ordinati e coerenti
+pi_ord    <- matrix(0, best_H, S_tot)
+alpha_ord <- matrix(0, best_H, S_tot)
+beta_ord  <- matrix(0, best_H, S_tot)
+for (s in 1:S_tot) {
+  ord <- order(alpha_mat[, s] / (alpha_mat[, s] + beta_mat[, s]))
+  pi_ord[, s]    <- pi_mat[ord, s]
+  alpha_ord[, s] <- alpha_mat[ord, s]
+  beta_ord[, s]  <- beta_mat[ord, s]
 }
 
-# Media delle probabilità su tutte le 4000 iterazioni MCMC
-prob_appartenenza <- prob_appartenenza / S_totale
+# Riassunti per componente: media a posteriori + IC 95%
+summ <- function(m) cbind(mean = rowMeans(m),
+                          lwr  = apply(m, 1, quantile, 0.025),
+                          upr  = apply(m, 1, quantile, 0.975))
+A <- summ(alpha_ord); B <- summ(beta_ord); P <- summ(pi_ord)
+comp_mean <- A[, "mean"] / (A[, "mean"] + B[, "mean"])
 
-# ------------------------------------------------------------------------------
-# ASSEGNAZIONE FINALE (HARD CLUSTERING)
-# ------------------------------------------------------------------------------
-# Per ogni riga (dato), troviamo quale colonna (cluster) ha la probabilità massima
-cluster_assegnati <- max.col(prob_appartenenza)
+tab <- data.frame(
+  Componente = 1:best_H,
+  Peso_pi    = round(P[, "mean"], 3),
+  Alpha      = round(A[, "mean"], 3),
+  Beta       = round(B[, "mean"], 3),
+  Media      = round(comp_mean, 3),
+  Alpha_IC   = paste0("[", round(A[, "lwr"], 2), ", ", round(A[, "upr"], 2), "]"),
+  Beta_IC    = paste0("[", round(B[, "lwr"], 2), ", ", round(B[, "upr"], 2), "]")
+)
+cat("--- Parametri dei componenti (medie a posteriori, IC 95%) ---\n")
+print(tab, row.names = FALSE)
 
-# Mettiamo i risultati nel dataframe originale per vederli!
-lf$Cluster <- as.factor(cluster_assegnati)
+# ---- Un pannello per ogni componente --------------------------------------
+x_seq <- seq(0.001, 0.999, length.out = 500)
+cols  <- c("black", "darkgreen", "purple", "darkorange", "brown")
 
-# Stampiamo un riassunto per il professore
-cat("\n--- DISTRIBUZIONE DEI DATI NEI CLUSTER ---\n")
-print(table(lf$Cluster))
+# 1) Calcola TUTTE le densità in anticipo  [punti x  x  componenti]
+dens_mat <- sapply(1:best_H, function(h) dbeta(x_seq, A[h, "mean"], B[h, "mean"]))
 
-# ------------------------------------------------------------------------------
-# VISUALIZZAZIONE DEL CLUSTERING
-# ------------------------------------------------------------------------------
-# Facciamo un istogramma in cui ogni barra è colorata in base al cluster di maggioranza
-library(ggplot2)
+# 2) Scala comune: stesso ylim (e xlim) per tutti i pannelli
+ylim_common <- c(0, 10)
+xlim_common <- c(0, 1)
 
-ggplot(lf, aes(x = load_factor, fill = Cluster)) +
-  geom_histogram(bins = 40, color = "white", alpha = 0.8, position = "identity") +
-  scale_fill_manual(values = c("black", "darkgreen", "purple", "darkorange", "brown")) +
-  labs(title = paste("Model-Based Clustering (H =", best_H, ")"),
-       subtitle = "Assegnazione a posteriori (MAP) immune al Label Switching",
-       x = "Load Factor",
-       y = "Frequenza") +
-  theme_minimal()
-```
-
-```{r}
-# ==============================================================================
-# BLOCCO 12: PANNELLI SEPARATI (FACETING) PER SINGOLO CLUSTER
-# ==============================================================================
-
-# Impostiamo una griglia 2x2 per visualizzare i 4 cluster separatamente
-par(mfrow = c(2, 2), mar = c(4, 4, 3, 1))
-
-colori_cluster <- c("black", "darkgreen", "purple", "darkorange")
-
+# 3) Disegna usando sempre la stessa scala
+par(mfrow = c(ceiling(best_H / 2), 2), mar = c(4, 4, 3, 1))
 for (h in 1:best_H) {
-  # Disegniamo lo sfondo: l'istogramma di tutti i dati in grigio chiarissimo
-  hist(my_data, breaks = 40, freq = FALSE, 
-       col = "#EEEEEE", border = "white",
-       xlim = c(min(my_data), 1.0), ylim = c(0, max(final_overall_mixture) + 1),
-       xlab = "Load Factor", main = paste("Isolamento Cluster", h))
-  
-  # Sovrapponiamo la linea della singola componente
-  lines(x_seq, final_components[h, ], col = colori_cluster[h], lwd = 3)
-  
-  # Riempiamo l'area sotto la curva con il colore semi-trasparente per farla risaltare
-  polygon(c(x_seq, rev(x_seq)), 
-          c(rep(0, length(x_seq)), rev(final_components[h, ])),
-          col = adjustcolor(colori_cluster[h], alpha.f = 0.4), border = NA)
+  plot(x_seq, dens_mat[, h], type = "l", lwd = 3, col = cols[h],
+       xlim = xlim_common, ylim = ylim_common,
+       xlab = "Load factor", ylab = "Densità",
+       main = paste("Componente", h))
+  legend("topright", bty = "n", cex = 0.9, text.col = cols[h],
+         legend = c(sprintf("peso  = %.3f", P[h, "mean"]),
+                    sprintf("alpha = %.2f", A[h, "mean"]),
+                    sprintf("beta  = %.2f", B[h, "mean"]),
+                    sprintf("media = %.3f", comp_mean[h])))
 }
-
-# Ripristiniamo il layout grafico standard di R (1 solo grafico per finestra)
 par(mfrow = c(1, 1))
+
+
 ```
+
+## Clustering su Z (Task 3 — assegnazione dei dati ai componenti)
+
+Al colloquio il professore ha parlato di **clustering su Z**: nella
+mistura la latente $z_i$ *è* l'etichetta di cluster, quindi "fare
+clustering su z" significa assegnare ogni osservazione al proprio
+componente e poi studiare gli assegnamenti in funzione dell'ora.
+
+**Attenzione al label switching.** Non usiamo la $z_i$ grezza di un
+singolo draw (le etichette si scambiano tra le iterazioni). Calcoliamo
+invece le **responsabilità a posteriori** usando i componenti
+**riordinati per media** ad ogni passo (lo stesso riordino del grafico
+precedente): $$
+r_{ih} = \frac{1}{S}\sum_{s=1}^S \frac{\pi^{(s)}_{(h)}\,\text{Beta}(x_i\mid\alpha^{(s)}_{(h)},\beta^{(s)}_{(h)})}{\sum_k \pi^{(s)}_{(k)}\,\text{Beta}(x_i\mid\alpha^{(s)}_{(k)},\beta^{(s)}_{(k)})},
+\qquad \hat z_i = \arg\max_h r_{ih},
+$$ dove $(h)$ indica l'$h$-esimo componente da sinistra. Così
+"Componente 1" è sempre quello con media più bassa e l'assegnazione è
+robusta.
 
 ```{r}
-# ==============================================================================
-# BLOCCO 13: PROBABILITÀ A POSTERIORI E CONFINI DI DECISIONE
-# ==============================================================================
+best_samples <- all_samples[[best_H]]
 
-# Creiamo una matrice per salvare le probabilità percentuali
-matrice_probabilita <- matrix(0, nrow = best_H, ncol = length(x_seq))
+# Parametri come matrici [H, S]  (S = iterazioni * catene)
+pi_mat    <- matrix(best_samples$pi_weights, nrow = best_H)
+alpha_mat <- matrix(best_samples$alpha,      nrow = best_H)
+beta_mat  <- matrix(best_samples$beta,       nrow = best_H)
+S_tot     <- ncol(pi_mat)
 
-# Calcoliamo la probabilità per ogni punto dell'asse X
-# Formula di Bayes: P(Cluster = h | X) = Densità_h(X) / Densità_Totale(X)
-for (h in 1:best_H) {
-  matrice_probabilita[h, ] <- final_components[h, ] / final_overall_mixture
+# Responsabilità medie: resp[i, h] = P(componente h | x_i)
+resp <- matrix(0, nrow = N, ncol = best_H)
+
+for (s in 1:S_tot) {
+  # riordino dei componenti per media crescente alpha/(alpha + beta)
+  ord <- order(alpha_mat[, s] / (alpha_mat[, s] + beta_mat[, s]))
+
+  # densità pesata (osservazione x componente riordinato)
+  w <- matrix(0, nrow = N, ncol = best_H)
+  for (h in 1:best_H) {
+    idx <- ord[h]
+    w[, h] <- pi_mat[idx, s] * dbeta(my_data, alpha_mat[idx, s], beta_mat[idx, s])
+  }
+  w <- w / rowSums(w)          # normalizziamo -> responsabilità a questo draw
+  resp <- resp + w
 }
+resp <- resp / S_tot
 
-# Inizializziamo il grafico vuoto impostando gli assi da 0 a 1 (0% - 100%)
-plot(x_seq, matrice_probabilita[1, ], type = "n",
-     ylim = c(0, 1), xlim = c(min(my_data), 1.0),
-     xlab = "Load Factor (Sforzo della Rete)", 
-     ylab = "Probabilità di Appartenenza",
-     main = "Confini di Decisione del Modello (Transizione tra regimi)",
-     yaxt = "n") # Nascondiamo l'asse Y di default per farlo in percentuali
+# Assegnazione MAP: ogni dato al componente più probabile
+z_map <- apply(resp, 1, which.max)
 
-# Creiamo un asse Y più leggibile (0%, 25%, 50%, 75%, 100%)
-axis(2, at = c(0, 0.25, 0.5, 0.75, 1), labels = c("0%", "25%", "50%", "75%", "100%"), las = 1)
-
-# Aggiungiamo una linea tratteggiata orizzontale al 50% (La soglia di maggioranza)
-abline(h = 0.5, col = "gray", lty = 2, lwd = 2)
-
-# Disegniamo le linee di probabilità per ciascun cluster
-for (h in 1:best_H) {
-  lines(x_seq, matrice_probabilita[h, ], col = colori_cluster[h], lwd = 3)
-}
-
-# Aggiungiamo la legenda
-legend("topleft", legend = paste("Cluster", 1:best_H),
-       col = colori_cluster, lwd = 3, bty = "n", bg = "white")
+cat("Numerosità dei cluster (assegnazione MAP):\n")
+print(table(factor(z_map, levels = 1:best_H)))
 ```
+
+Ora la richiesta del Task 3: la **frazione empirica** di osservazioni in
+ogni componente in funzione dell'ora del giorno.
+
+```{r}
+hours <- lf_fit$hour   # 'hour' allineato a my_data (vedi chunk dei dati)
+
+# tabella ora x componente, poi frazioni per riga (ogni ora somma a 1)
+tab      <- table(factor(hours, levels = 0:23), factor(z_map, levels = 1:best_H))
+frac_mat <- prop.table(tab, margin = 1)
+
+cols <- c("black", "darkgreen", "purple", "darkorange", "brown")
+matplot(0:23, as.matrix(frac_mat), type = "b", pch = 19, lty = 1,
+        col = cols[1:best_H], lwd = 2,
+        xlab = "Ora del giorno",
+        ylab = "Frazione di osservazioni nel componente",
+        main = "Composizione dei cluster per ora (assegnazione MAP su z)")
+legend("topleft", legend = paste("Componente", 1:best_H),
+       col = cols[1:best_H], lwd = 2, pch = 19, bty = "n")
+```
+
+**Lettura.** Ogni componente della mistura cattura una "forma" del load
+factor (off-peak basso vs picco vicino a 1); il grafico mostra come la
+probabilità di appartenere a ciascun componente vari con l'ora, cioè il
+legame tra forma del carico e fascia oraria. Il passo successivo (Task
+4, non ancora svolto) modellerà questa relazione con una regressione
+logistica multinomiale su `hour` trasformata con feature di Fourier, da
+confrontare con questo profilo empirico.
