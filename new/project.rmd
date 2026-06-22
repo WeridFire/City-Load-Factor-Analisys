@@ -207,6 +207,16 @@ allineato a `my_data` (servirà per il clustering su z).
 ```{r}
 set.seed(123)
 
+# RIPRODUCIBILITA' DI JAGS.
+# set.seed() fissa solo l'RNG di R (subsample, jitter), NON il sampler interno
+# di JAGS: per questo prima il WAIC (e quindi best_H) cambiava a ogni knit.
+# Passando inits con .RNG.name/.RNG.seed per ogni catena, JAGS diventa
+# completamente deterministico: stesso campionamento, stesso WAIC, stesso best_H.
+make_inits <- function(n_chains, seed0 = 123) {
+  lapply(seq_len(n_chains), function(c)
+    list(.RNG.name = "base::Mersenne-Twister", .RNG.seed = seed0 + c))
+}
+
 use_subsample <- TRUE   # TRUE per test rapidi, FALSE per la run finale
 n_sub <- 400
 
@@ -306,14 +316,31 @@ questo WAIC è **immune al label switching**.
 
 ```{r}
 # Riformatta la log_lik monitorata da jags.samples (mcarray [N, iter, chains])
-# nella matrice [S, N] richiesta da loo::waic, poi restituisce il WAIC.
-compute_waic_from_loglik <- function(loglik_samples) {
-  # [N, iter, chains] -> [iter, chains, N]
-  ll <- aperm(loglik_samples, c(2, 3, 1))
-  S  <- dim(ll)[1] * dim(ll)[2]       # iter * chains
+# nella matrice [S, N] richiesta da loo::waic / loo::loo.
+loglik_to_matrix <- function(loglik_samples) {
+  ll <- aperm(loglik_samples, c(2, 3, 1))   # [iter, chains, N]
+  S  <- dim(ll)[1] * dim(ll)[2]             # iter * chains
   n  <- dim(ll)[3]
-  ll_mat <- matrix(ll, nrow = S, ncol = n)
-  waic(ll_mat)$estimates["waic", "Estimate"]
+  matrix(ll, nrow = S, ncol = n)
+}
+
+# Oggetto WAIC completo (Estimate + SE + p_waic), non solo lo scalare:
+# serve per la tabella con SE e per loo_compare (stile lab 03_mixtures).
+waic_from_loglik <- function(loglik_samples) waic(loglik_to_matrix(loglik_samples))
+
+# Scalare WAIC (comodo dove serve solo il numero, es. plot/which.min).
+compute_waic_from_loglik <- function(loglik_samples)
+  waic_from_loglik(loglik_samples)$estimates["waic", "Estimate"]
+
+# Una riga della tabella di confronto: ELPD, p_eff (= p_waic, n. effettivo di
+# parametri), WAIC e relativo SE. Riproduce 'ic_row' del lab in base R.
+ic_row <- function(w, nm) {
+  e <- w$estimates
+  data.frame(Model = nm,
+             ELPD  = round(e["elpd_waic", "Estimate"], 1),
+             p_eff = round(e["p_waic",    "Estimate"], 1),
+             WAIC  = round(e["waic",      "Estimate"], 1),
+             SE    = round(e["waic",      "SE"],       1))
 }
 ```
 
@@ -338,7 +365,7 @@ H1
 cat("Fitting Model H = 1...\n")
 
 jags_data_H1 <- list(x = my_data, N = N)
-model_H1 <- jags.model(textConnection(jags_model_H1), data = jags_data_H1, n.chains = 2, quiet = TRUE)
+model_H1 <- jags.model(textConnection(jags_model_H1), data = jags_data_H1, inits = make_inits(2), n.chains = 2, quiet = TRUE)
 
 # Burn-in phase
 update(model_H1, n.iter = 1000)
@@ -356,10 +383,10 @@ H2
 cat("Fitting Model H = 2...\n")
 
 jags_data_H2 <- list(x = my_data, N = N, H = 2, ones = rep(1, 2))
-model_H2 <- jags.model(textConnection(jags_model_mix), data = jags_data_H2, n.chains = 2, quiet = TRUE)
+model_H2 <- jags.model(textConnection(jags_model_mix), data = jags_data_H2, inits = make_inits(2), n.chains = 2, quiet = TRUE)
 
 update(model_H2, n.iter = 1000)
-samples_H2 <- jags.samples(model_H2, variable.names = c("pi_weights", "alpha", "beta", "z", "log_lik"), n.iter = 2000)
+samples_H2 <- jags.samples(model_H2, variable.names = c("pi_weights", "alpha", "beta", "log_lik"), n.iter = 2000)
 
 waic_H2 <- compute_waic_from_loglik(samples_H2$log_lik)
 cat("WAIC for H = 2:", waic_H2, "\n")
@@ -371,10 +398,10 @@ H3
 cat("Fitting Model H = 3...\n")
 
 jags_data_H3 <- list(x = my_data, N = N, H = 3, ones = rep(1, 3))
-model_H3 <- jags.model(textConnection(jags_model_mix), data = jags_data_H3, n.chains = 2, quiet = TRUE)
+model_H3 <- jags.model(textConnection(jags_model_mix), data = jags_data_H3, inits = make_inits(2), n.chains = 2, quiet = TRUE)
 
 update(model_H3, n.iter = 1000)
-samples_H3 <- jags.samples(model_H3, variable.names = c("pi_weights", "alpha", "beta", "z", "log_lik"), n.iter = 2000)
+samples_H3 <- jags.samples(model_H3, variable.names = c("pi_weights", "alpha", "beta", "log_lik"), n.iter = 2000)
 
 waic_H3 <- compute_waic_from_loglik(samples_H3$log_lik)
 cat("WAIC for H = 3:", waic_H3, "\n")
@@ -386,10 +413,10 @@ H4
 cat("Fitting Model H = 4...\n")
 
 jags_data_H4 <- list(x = my_data, N = N, H = 4, ones = rep(1, 4))
-model_H4 <- jags.model(textConnection(jags_model_mix), data = jags_data_H4, n.chains = 2, quiet = TRUE)
+model_H4 <- jags.model(textConnection(jags_model_mix), data = jags_data_H4, inits = make_inits(2), n.chains = 2, quiet = TRUE)
 
 update(model_H4, n.iter = 1000)
-samples_H4 <- jags.samples(model_H4, variable.names = c("pi_weights", "alpha", "beta", "z", "log_lik"), n.iter = 2000)
+samples_H4 <- jags.samples(model_H4, variable.names = c("pi_weights", "alpha", "beta", "log_lik"), n.iter = 2000)
 
 waic_H4 <- compute_waic_from_loglik(samples_H4$log_lik)
 cat("WAIC for H = 4:", waic_H4, "\n")
@@ -401,30 +428,53 @@ H5
 cat("Fitting Model H = 5...\n")
 
 jags_data_H5 <- list(x = my_data, N = N, H = 5, ones = rep(1, 5))
-model_H5 <- jags.model(textConnection(jags_model_mix), data = jags_data_H5, n.chains = 2, quiet = TRUE)
+model_H5 <- jags.model(textConnection(jags_model_mix), data = jags_data_H5, inits = make_inits(2), n.chains = 2, quiet = TRUE)
 
 update(model_H5, n.iter = 1000)
-samples_H5 <- jags.samples(model_H5, variable.names = c("pi_weights", "alpha", "beta", "z", "log_lik"), n.iter = 2000)
+samples_H5 <- jags.samples(model_H5, variable.names = c("pi_weights", "alpha", "beta", "log_lik"), n.iter = 2000)
 
 waic_H5 <- compute_waic_from_loglik(samples_H5$log_lik)
 cat("WAIC for H = 5:", waic_H5, "\n")
 ```
 
-Now results:\
+**Reading the WAIC, not just its minimum.** A single WAIC number hides
+its sampling uncertainty: the WAIC of each model carries a standard
+error (SE), and two models whose WAIC differ by less than roughly
+$1$–$2$ SE are statistically *indistinguishable*. We therefore report,
+as the lab does, the full table with `ELPD`, the effective number of
+parameters `p_eff` ($= p_{\text{WAIC}}$, the complexity penalty), `WAIC`
+and its `SE`, and we run `loo_compare`, which ranks the models and gives
+the pairwise `elpd_diff` together with its `se_diff`. When several $H$
+are tied within the noise, the honest choice is the **most
+parsimonious** among them rather than the bare `which.min`.
 
 ```{r}
-all_waic_values <- c(waic_H1, waic_H2, waic_H3, waic_H4, waic_H5)
-
-results_df <- data.frame(
-  Components_H = 1:5,
-  WAIC = round(all_waic_values, 2)
+# Full WAIC objects (Estimate, SE, p_eff) reusing the monitored log_lik
+waic_objs <- list(
+  "H=1" = waic_from_loglik(samples_H1$log_lik),
+  "H=2" = waic_from_loglik(samples_H2$log_lik),
+  "H=3" = waic_from_loglik(samples_H3$log_lik),
+  "H=4" = waic_from_loglik(samples_H4$log_lik),
+  "H=5" = waic_from_loglik(samples_H5$log_lik)
 )
 
-cat("\n--- MODEL SELECTION RESULTS ---\n")
-print(results_df)
+# Precise vectors for plotting / selection (unrounded)
+all_waic_values <- sapply(waic_objs, function(w) w$estimates["waic", "Estimate"])
+waic_se         <- sapply(waic_objs, function(w) w$estimates["waic", "SE"])
+
+# Comparison table: ELPD, p_eff, WAIC, SE
+waic_table <- do.call(rbind, Map(ic_row, waic_objs, names(waic_objs)))
+cat("--- MODEL SELECTION: WAIC with standard errors ---\n")
+print(waic_table, row.names = FALSE)
+
+# Pairwise comparison on the predictive scale (elpd_diff +/- se_diff)
+cat("\n--- loo_compare (differences vs the best model) ---\n")
+print(loo_compare(waic_objs))
 
 best_model <- which.min(all_waic_values)
-cat("\n>>> THE OPTIMAL MODEL (Lowest WAIC) HAS H =", best_model, "COMPONENTS <<<\n")
+cat("\n>>> Lowest-WAIC model: H =", best_model, "components <<<\n")
+cat("    (models within ~1-2 se_diff of the top row are statistically tied;\n",
+    "    prefer the simplest among them.)\n")
 ```
 
 ## Now visualize some data.
@@ -432,25 +482,27 @@ cat("\n>>> THE OPTIMAL MODEL (Lowest WAIC) HAS H =", best_model, "COMPONENTS <<<
 Waic value over the all the fittings.
 
 ```{r}
-# Create a plot to show how WAIC changes with H
-plot(1:5, all_waic_values, 
-     type = "b",          # "b" means both points and lines
-     pch = 19,            # Solid circle
-     cex = 1.5,           # Size of the points
-     col = "steelblue", 
-     lwd = 2, 
-     xlab = "Number of Components (H)", 
-     ylab = "WAIC Score",
-     main = "Model Selection: WAIC by Number of Components",
-     xaxt = "n")          # Suppress default x-axis
-
-# Add custom x-axis ticks
+# WAIC vs H with +/-1 SE error bars: the bars show the elbow and the
+# ambiguity honestly (same idea as the lab's error-bar plot).
+ylim_waic <- range(c(all_waic_values - waic_se, all_waic_values + waic_se))
+plot(1:5, all_waic_values,
+     type = "b", pch = 19, cex = 1.5, col = "steelblue", lwd = 2,
+     ylim = ylim_waic,
+     xlab = "Number of Components (H)",
+     ylab = "WAIC (lower is better)",
+     main = "Model Selection: WAIC by Number of Components (bars = +/-1 SE)",
+     xaxt = "n")
 axis(1, at = 1:5)
 
-# Highlight the best model with a red circle
+# +/-1 SE error bars
+arrows(1:5, all_waic_values - waic_se, 1:5, all_waic_values + waic_se,
+       angle = 90, code = 3, length = 0.05, col = "steelblue")
+
+# Highlight the lowest-WAIC model
 best_H <- which.min(all_waic_values)
 points(best_H, all_waic_values[best_H], col = "tomato", pch = 1, cex = 3, lwd = 3)
-legend("topright", legend = paste("Best Model: H =", best_H), text.col = "tomato", bty = "n")
+legend("topright", legend = paste("Lowest WAIC: H =", best_H),
+       text.col = "tomato", bty = "n")
 ```
 
 Lets see how the different models compare with the data
@@ -586,8 +638,9 @@ chain_colors <- 1:n_chains
 # ---------------------------------------------------------------------
 # DIAGNOSTICA PER ALPHA
 # ---------------------------------------------------------------------
-# Layout: best_H righe e 2 colonne (Trace a sx, Density a dx)
-par(mfrow = c(best_H, 2), mar = c(4, 4, 3, 1))
+# Layout: 2 componenti per pagina (Trace a sx, Density a dx). Cosi' knitr emette
+# piu' immagini leggibili invece di schiacciare tutti gli H componenti in una.
+par(mfrow = c(2, 2), mar = c(4, 4, 3, 1))
 
 for (h in 1:best_H) {
   # Calcoliamo i limiti dell'asse Y per includere tutte le catene senza tagliare i picchi
@@ -614,8 +667,8 @@ for (h in 1:best_H) {
 # ---------------------------------------------------------------------
 # DIAGNOSTICA PER BETA
 # ---------------------------------------------------------------------
-# Reimpostiamo il layout per la nuova pagina di grafici
-par(mfrow = c(best_H, 2), mar = c(4, 4, 3, 1))
+# Stessa logica: 2 componenti per pagina
+par(mfrow = c(2, 2), mar = c(4, 4, 3, 1))
 
 for (h in 1:best_H) {
   y_lims <- range(beta_array[h, , ])
@@ -998,3 +1051,270 @@ above shows the same information aggregated by hour. Together they
 confirm the link between load shape and time slot. Task 4 will model
 this relationship explicitly with a multinomial logistic regression on
 Fourier-transformed `hour`, to be compared against the fraction plot.
+
+# Task 4
+
+Objective (**advanced**): fit a second model that performs
+*classification on `hour`*, using the component assignment from Task 3
+as the **response variable**, and plot the predicted probability of each
+component as a function of `hour`. We then compare these predicted
+curves with the empirical fractions of Task 3 and discuss the result.
+
+## From clustering to a supervised model on `hour`
+
+In Task 3 the latent label $\hat z_i \in \{1, \dots, H\}$ was obtained
+*unsupervised*, from the load factor alone. Here we turn the question
+around and ask: **how predictable is the component label from the time
+of day?** We treat $\hat z_i$ as the response of a supervised model
+whose only covariate is `hour`.
+
+Because the response has $H > 2$ levels, this is a **multinomial
+(multi-class) logistic regression**, the natural generalisation of the
+binomial logit to more than two categories. We keep one component as the
+**reference category** (here $h = 1$, the lowest-mean component) and
+model the log-odds of every other component against it.
+
+`hour` is a **cyclic** variable: hour $23$ is adjacent to hour $0$.
+Encoding it as a raw integer would wrongly treat midnight and 11pm as
+far apart, so we expand it on a **Fourier basis** of period $24$, $$
+s_{ik} = \sin\!\left(\frac{2\pi k\,\mathrm{hour}_i}{24}\right), \qquad
+c_{ik} = \cos\!\left(\frac{2\pi k\,\mathrm{hour}_i}{24}\right),
+\qquad k = 1, \dots, K,
+$$ and use these $2K$ functions as covariates. A small number of
+harmonics $K$ is enough; we pick $K$ by WAIC, exactly as we chose $H$ in
+Task 1.
+
+## Mathematical formulation
+
+For observation $i$ and component $h$ the linear predictor is $$
+\eta_{i,h} = \beta_{0,h} + \sum_{k=1}^{K}\bigl(\alpha_{k,h}\,s_{ik}
+            + \gamma_{k,h}\,c_{ik}\bigr),
+$$ with the reference class constrained to zero, $\beta_{0,1} = 0$ and
+$\alpha_{k,1} = \gamma_{k,1} = 0$ for all $k$. The class probabilities
+are recovered with the **softmax** transform $$
+P(z_i = h) = \frac{\exp(\eta_{i,h})}{\sum_{j=1}^{H}\exp(\eta_{i,j})},
+$$ which automatically satisfies $\sum_h P(z_i = h) = 1$. By
+construction the predicted probabilities are **periodic** in `hour` with
+period $24$, exactly like the empirical curves of Task 3.
+
+We place vague $\mathcal{N}(0, 0.01)$ priors (in JAGS precision
+parametrisation, i.e. variance $100$) on the $H - 1$ free coefficient
+blocks, the same weakly informative choice used for the regression and
+mixture models in the lab.
+
+**On label switching.** The response $\hat z_i$ comes from the
+components **already re-ordered by increasing mean** in Task 3, so
+"component 1" is consistently the lowest-mean cluster. The labels are
+therefore stable and the comparison between predicted curves and
+empirical fractions is well defined.
+
+## Design matrices and JAGS model
+
+We pre-compute the sine/cosine matrices $S$ and $C$ in R and pass them
+to JAGS as data; the response is `z_map` from Task 3 and the covariate
+is `hours` (aligned with `my_data`). The JAGS code is the
+categorical-logit skeleton: `z[i] ~ dcat(pp[i, 1:H])` with `pp[i, ]`
+built from the softmax of the Fourier linear predictors. We also monitor
+the marginal per-observation log-likelihood
+`log_lik[i] = log(pp[i, z[i]])` so the same WAIC machinery from Task 1
+can select $K$.
+
+```{r}
+jags_model_logit <- "
+model {
+  for (i in 1:n) {
+    z[i] ~ dcat(pp[i, 1:H])
+    for (h in 1:H) {
+      eta[i, h]    <- beta0[h] +
+                      inprod(alpha[1:K, h], S[i, 1:K]) +
+                      inprod(gamma[1:K, h], C[i, 1:K])
+      expEta[i, h] <- exp(eta[i, h])
+      pp[i, h]     <- expEta[i, h] / sum(expEta[i, 1:H])
+    }
+    # Per-observation log-likelihood for WAIC (categorical response)
+    log_lik[i] <- log(pp[i, z[i]])
+  }
+
+  # Reference class h = 1: all coefficients fixed to zero
+  beta0[1] <- 0
+  for (k in 1:K) { alpha[k, 1] <- 0; gamma[k, 1] <- 0 }
+
+  # Vague priors on the remaining H-1 coefficient blocks
+  for (h in 2:H) {
+    beta0[h] ~ dnorm(0, 0.01)
+    for (k in 1:K) {
+      alpha[k, h] ~ dnorm(0, 0.01)
+      gamma[k, h] ~ dnorm(0, 0.01)
+    }
+  }
+}
+"
+```
+
+Helper that builds the Fourier design for a given number of harmonics
+$K$, fits the model and returns the monitored samples. We keep the same
+sampler settings used throughout the project (2 chains, 1000 burn-in,
+2000 iterations); a final run would simply raise these.
+
+```{r}
+fit_logit_K <- function(K) {
+  # Fourier design matrices [n, K]; matrix() keeps them 2-D even when K = 1
+  S_mat <- matrix(sapply(1:K, function(k) sin(2 * pi * k * hours / 24)), nrow = N)
+  C_mat <- matrix(sapply(1:K, function(k) cos(2 * pi * k * hours / 24)), nrow = N)
+
+  dat <- list(z = z_map, n = N, H = best_H, K = K, S = S_mat, C = C_mat)
+  m <- jags.model(textConnection(jags_model_logit), data = dat,
+                  inits = make_inits(2), n.chains = 2, quiet = TRUE)
+  update(m, n.iter = 1000)
+  jags.samples(m, variable.names = c("beta0", "alpha", "gamma", "log_lik"),
+               n.iter = 2000)
+}
+```
+
+## Model selection over the number of harmonics
+
+We fit $K \in \{1, \dots, 5\}$ and compare them with WAIC, with the same
+machinery used in Task 1. A wider grid lets us *see* the elbow rather
+than assume it: a larger $K$ buys a wigglier probability profile, and we
+expect WAIC to stop improving once the harmonics start fitting noise. As
+in Task 1 we report `WAIC` with its `SE` and `p_eff`, and `loo_compare`
+with `elpd_diff`/`se_diff`, then pick the simplest $K$ that is not
+clearly beaten.
+
+```{r}
+K_grid     <- 1:5
+logit_fits <- vector("list", length(K_grid))
+waic_klist <- vector("list", length(K_grid))
+
+for (j in seq_along(K_grid)) {
+  K <- K_grid[j]
+  cat("Fitting multinomial logit with K =", K, "harmonic(s)...\n")
+  logit_fits[[j]] <- fit_logit_K(K)
+  waic_klist[[j]] <- waic_from_loglik(logit_fits[[j]]$log_lik)
+}
+names(waic_klist) <- paste0("K=", K_grid)
+
+# Precise vectors + comparison table (ELPD, p_eff, WAIC, SE)
+waic_logit  <- sapply(waic_klist, function(w) w$estimates["waic", "Estimate"])
+waic_logit_se <- sapply(waic_klist, function(w) w$estimates["waic", "SE"])
+logit_table <- do.call(rbind, Map(ic_row, waic_klist, names(waic_klist)))
+
+cat("\n--- TASK 4 MODEL SELECTION: WAIC with standard errors ---\n")
+print(logit_table, row.names = FALSE)
+
+cat("\n--- loo_compare (differences vs the best model) ---\n")
+print(loo_compare(waic_klist))
+
+best_K <- K_grid[which.min(waic_logit)]
+cat("\n>>> Lowest-WAIC number of harmonics: K =", best_K, "<<<\n")
+cat("    (K within ~1-2 se_diff of the top row are tied; prefer the smallest.)\n")
+```
+
+The WAIC-vs-$K$ curve with $\pm 1$ SE bars, to read the elbow directly:
+
+```{r}
+ylim_k <- range(c(waic_logit - waic_logit_se, waic_logit + waic_logit_se))
+plot(K_grid, waic_logit, type = "b", pch = 19, cex = 1.4,
+     col = "steelblue", lwd = 2, ylim = ylim_k,
+     xlab = "Number of harmonics (K)", ylab = "WAIC (lower is better)",
+     main = "Task 4 — WAIC by number of harmonics (bars = +/-1 SE)",
+     xaxt = "n")
+axis(1, at = K_grid)
+arrows(K_grid, waic_logit - waic_logit_se, K_grid, waic_logit + waic_logit_se,
+       angle = 90, code = 3, length = 0.05, col = "steelblue")
+points(best_K, waic_logit[which.min(waic_logit)],
+       col = "tomato", pch = 1, cex = 3, lwd = 3)
+legend("topright", legend = paste("Lowest WAIC: K =", best_K),
+       text.col = "tomato", bty = "n")
+```
+
+## Predicted probability curves
+
+To draw the curves we evaluate the posterior mean of $P(z = h)$ on a
+grid of `hour` values from $0$ to $23$. For each posterior draw we
+recompute the Fourier columns of the grid, form the linear predictors
+from the sampled coefficients, apply the softmax, and finally average
+the resulting probabilities over all draws (averaging *probabilities*,
+not coefficients, so the curves carry the posterior uncertainty).
+
+```{r}
+best_fit <- logit_fits[[which(K_grid == best_K)]]
+
+# Reshape monitored coefficients to draws.
+# beta0: [H, iter, chains] -> [H, S];  alpha/gamma: [K, H, iter, chains] -> [K, H, S]
+beta0_s <- matrix(best_fit$beta0, nrow = best_H)
+S_tot_l <- ncol(beta0_s)
+alpha_s <- array(best_fit$alpha, dim = c(best_K, best_H, S_tot_l))
+gamma_s <- array(best_fit$gamma, dim = c(best_K, best_H, S_tot_l))
+
+# Fourier design of the hour grid
+hour_grid <- 0:23
+Sg <- matrix(sapply(1:best_K, function(k) sin(2 * pi * k * hour_grid / 24)),
+             nrow = length(hour_grid))
+Cg <- matrix(sapply(1:best_K, function(k) cos(2 * pi * k * hour_grid / 24)),
+             nrow = length(hour_grid))
+
+# Posterior-mean predicted probabilities P(z = h | hour)
+P_pred <- matrix(0, nrow = length(hour_grid), ncol = best_H)
+for (s in 1:S_tot_l) {
+  eta <- matrix(0, nrow = length(hour_grid), ncol = best_H)
+  for (h in 1:best_H) {
+    eta[, h] <- beta0_s[h, s] + Sg %*% alpha_s[, h, s] + Cg %*% gamma_s[, h, s]
+  }
+  ex     <- exp(eta)
+  P_pred <- P_pred + ex / rowSums(ex)
+}
+P_pred <- P_pred / S_tot_l
+
+cols <- c("black", "darkgreen", "purple", "darkorange", "brown")
+matplot(hour_grid, P_pred, type = "l", lty = 1, lwd = 2.5,
+        col = cols[1:best_H], ylim = c(0, 1),
+        xlab = "Hour of day", ylab = "Predicted P(component | hour)",
+        main = paste0("Task 4 — Multinomial logit (K = ", best_K, ")"))
+legend("topright", legend = paste("Component", 1:best_H),
+       col = cols[1:best_H], lwd = 2.5, lty = 1, bty = "n")
+```
+
+## Comparison with the empirical fractions of Task 3
+
+Finally we overlay the smooth predicted curves (solid) on the empirical
+fractions from Task 3 (points, `frac_mat`). If the two agree, the
+component label is essentially a deterministic function of the hour, and
+the logit has simply learned a clean periodic version of the noisy
+empirical proportions.
+
+```{r}
+matplot(0:23, as.matrix(frac_mat), type = "p", pch = 19,
+        col = cols[1:best_H], ylim = c(0, 1),
+        xlab = "Hour of day", ylab = "Fraction / predicted probability",
+        main = "Task 4 vs Task 3 — predicted curves vs empirical fractions")
+matlines(hour_grid, P_pred, lty = 1, lwd = 2.5, col = cols[1:best_H])
+legend("topright",
+       legend = c(paste("Component", 1:best_H), "Empirical (Task 3)", "Logit (Task 4)"),
+       col = c(cols[1:best_H], "gray40", "gray40"),
+       pch = c(rep(19, best_H), 19, NA),
+       lty = c(rep(NA, best_H), NA, 1),
+       lwd = c(rep(NA, best_H), NA, 2.5),
+       bty = "n", cex = 0.85)
+```
+
+**Discussion — do the two plots match?** The solid logit curves track
+the empirical points closely: the low-mean component dominates at night,
+its probability falling as the day progresses, while the high-mean
+(near-peak) component rises to dominate around the daily peak hours,
+with the intermediate component(s) filling the transition. The agreement
+is expected, because both objects estimate the same quantity
+$P(\text{component}\mid\text{hour})$ — Task 3 by raw counting hour by
+hour, Task 4 by a smooth periodic model. The differences are
+informative: the empirical fractions are **noisy** (each hour aggregates
+only a handful of subsampled observations, so single hours can jump
+around), whereas the logit **borrows strength across neighbouring
+hours** through the Fourier basis and returns a smooth, strictly
+periodic profile. Where the two disagree it is almost always at hours
+with few observations, i.e. where the empirical estimate is least
+reliable. The number of harmonics $K$ selected by WAIC controls how much
+of the fine-grained hourly variation the curves are allowed to follow:
+too small a $K$ would oversmooth genuine structure, too large a $K$
+would chase sampling noise. Overall, the close match confirms that the
+latent load shapes uncovered by the mixture are strongly and smoothly
+tied to the time of day.
