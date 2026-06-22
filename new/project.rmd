@@ -552,16 +552,112 @@ if (best_H > 1) {
 }
 ```
 
-Since the previous data may not fit perfectly due to Label Switching
-here we fix it by ordering the mixture components at each MCMC step
-according to their expected value. Instead of naively averaging the raw
-shape parameters across iterations—which blends swapped labels and
-creates non-existent 'Frankenstein' distributions—we dynamically align
-the components from left to right. We then compute the densities for
-these sorted components and average the curves themselves. This
-guarantees that 'Component 1' is consistently the leftmost distribution
-across all samples, completely neutralizing the label-switching effect
-and revealing the true anatomy of the mixture model.
+## MCMC Diagnostics: The Label Switching Problem
+
+Although the overall mixture density accurately captures the empirical
+data, directly averaging the parameters across all MCMC iterations (as
+done above) can be misleading. To understand why, we must inspect the
+MCMC trace plots.
+
+```{r}
+# =====================================================================
+# MCMC DIAGNOSTICS: TRACE E DENSITY PER ALPHA E BETA (STILE 03_mixtures)
+# =====================================================================
+# Estraiamo i campioni grezzi per il modello migliore (es. H = 4)
+raw_samples <- all_samples[[best_H]]
+
+# Creiamo le matrici grezze [Componente, Iterazioni] SENZA alcun ordinamento
+raw_pi_mat    <- matrix(raw_samples$pi_weights, nrow = best_H)
+raw_alpha_mat <- matrix(raw_samples$alpha, nrow = best_H)
+raw_beta_mat  <- matrix(raw_samples$beta, nrow = best_H)
+
+# Estraiamo gli array 3D originali restituiti da jags.samples
+# Dimensioni: [Componente, Iterazione, Catena]
+alpha_array <- raw_samples$alpha
+beta_array  <- raw_samples$beta
+
+# Ricaviamo numero di iterazioni e di catene
+n_iter   <- dim(alpha_array)[2]
+n_chains <- dim(alpha_array)[3]
+
+# Colori standard usati da 'coda' per le catene (1=nero, 2=rosso, 3=verde, ecc.)
+chain_colors <- 1:n_chains
+
+# ---------------------------------------------------------------------
+# DIAGNOSTICA PER ALPHA
+# ---------------------------------------------------------------------
+# Layout: best_H righe e 2 colonne (Trace a sx, Density a dx)
+par(mfrow = c(best_H, 2), mar = c(4, 4, 3, 1))
+
+for (h in 1:best_H) {
+  # Calcoliamo i limiti dell'asse Y per includere tutte le catene senza tagliare i picchi
+  y_lims <- range(alpha_array[h, , ])
+  
+  # 1. Trace plot: Disegniamo prima la Catena 1
+  plot(1:n_iter, alpha_array[h, , 1], type = "l", col = chain_colors[1],
+       ylim = y_lims, xlab = "Iterations", ylab = "",
+       main = paste0("Trace of alpha[", h, "]"))
+  
+  # Sovrapponiamo le altre catene con colori diversi
+  if (n_chains > 1) {
+    for (c in 2:n_chains) {
+      lines(1:n_iter, alpha_array[h, , c], col = chain_colors[c])
+    }
+  }
+  
+  # 2. Density plot: calcolato su tutti i campioni uniti (raw_alpha_mat)
+  plot(density(raw_alpha_mat[h, ]),
+       main = paste0("Density of alpha[", h, "]"),
+       xlab = "", ylab = "Density")
+}
+
+# ---------------------------------------------------------------------
+# DIAGNOSTICA PER BETA
+# ---------------------------------------------------------------------
+# Reimpostiamo il layout per la nuova pagina di grafici
+par(mfrow = c(best_H, 2), mar = c(4, 4, 3, 1))
+
+for (h in 1:best_H) {
+  y_lims <- range(beta_array[h, , ])
+  
+  # 1. Trace plot: Catena 1
+  plot(1:n_iter, beta_array[h, , 1], type = "l", col = chain_colors[1],
+       ylim = y_lims, xlab = "Iterations", ylab = "",
+       main = paste0("Trace of beta[", h, "]"))
+  
+  # Sovrapponiamo le altre catene
+  if (n_chains > 1) {
+    for (c in 2:n_chains) {
+      lines(1:n_iter, beta_array[h, , c], col = chain_colors[c])
+    }
+  }
+  
+  # 2. Density plot
+  plot(density(raw_beta_mat[h, ]),
+       main = paste0("Density of beta[", h, "]"),
+       xlab = "", ylab = "Density")
+}
+
+# Ripristino del layout di default
+par(mfrow = c(1, 1))
+```
+
+\
+\
+As clearly visible in the trace plot, the sampling chains lack
+identifiability. The lines frequently cross and swap positions
+abruptly—a phenomenon known as Label Switching. Because JAGS assigns
+component labels randomly during the simulation, taking a naive
+arithmetic average of the raw shape parameters blends swapped labels
+together, creating non-existent "Frankenstein" distributions.
+
+To fix this, we order the mixture components at each MCMC step according
+to their expected value. We dynamically align the components from left
+to right, compute the densities for these sorted components, and average
+the curves themselves. This guarantees that "Component 1" is
+consistently the leftmost distribution across all samples, completely
+neutralizing the label-switching effect and revealing the true anatomy
+of the latent subgroups.
 
 ```{r}
 
