@@ -613,9 +613,8 @@ done above) can be misleading. To understand why, we must inspect the
 MCMC trace plots.
 
 ```{r}
-# =====================================================================
-# MCMC DIAGNOSTICS: TRACE E DENSITY PER ALPHA E BETA (STILE 03_mixtures)
-# =====================================================================
+
+# MCMC DIAGNOSTICS: TRACE E DENSITY PER ALPHA, BETA E WEIGHTS
 # Estraiamo i campioni grezzi per il modello migliore (es. H = 4)
 raw_samples <- all_samples[[best_H]]
 
@@ -628,6 +627,7 @@ raw_beta_mat  <- matrix(raw_samples$beta, nrow = best_H)
 # Dimensioni: [Componente, Iterazione, Catena]
 alpha_array <- raw_samples$alpha
 beta_array  <- raw_samples$beta
+pi_array <- raw_samples$pi_weights
 
 # Ricaviamo numero di iterazioni e di catene
 n_iter   <- dim(alpha_array)[2]
@@ -668,8 +668,7 @@ for (h in 1:best_H) {
 # ---------------------------------------------------------------------
 # DIAGNOSTICA PER BETA
 # ---------------------------------------------------------------------
-# Stessa logica: 2 componenti per pagina
-par(mfrow = c(2, 2), mar = c(4, 4, 3, 1))
+
 
 for (h in 1:best_H) {
   y_lims <- range(beta_array[h, , ])
@@ -692,17 +691,44 @@ for (h in 1:best_H) {
        xlab = "", ylab = "Density")
 }
 
+# ---------------------------------------------------------------------
+# DIAGNOSTICA PER PI
+# ---------------------------------------------------------------------
+
+for (h in 1:best_H) {
+  # I pesi sono vincolati tra 0 e 1, ma usiamo il range effettivo per non tagliare il dettaglio
+  y_lims <- range(pi_array[h, , ])
+  
+  # 1. Trace plot: Disegniamo prima la Catena 1
+  plot(1:n_iter, pi_array[h, , 1], type = "l", col = chain_colors[1],
+       ylim = y_lims, xlab = "Iterations", ylab = "",
+       main = paste0("Trace of pi[", h, "]"))
+  
+  # Sovrapponiamo le altre catene
+  if (n_chains > 1) {
+    for (c in 2:n_chains) {
+      lines(1:n_iter, pi_array[h, , c], col = chain_colors[c])
+    }
+  }
+  
+  # 2. Density plot: calcolato sulla matrice unita (raw_pi_mat)
+  plot(density(raw_pi_mat[h, ]),
+       main = paste0("Density of pi[", h, "]"),
+       xlab = "", ylab = "Density")
+}
+
 # Ripristino del layout di default
 par(mfrow = c(1, 1))
 ```
 
 ```{r}
-# Function to calculate R-hat and return a clean, structured data frame
-calculate_rhat_table <- function(alpha_array, beta_array, best_H, n_chains) {
+# Function to calculate R-hat and return a clean, structured data frame including mixture weights
+calculate_rhat_table <- function(alpha_array, beta_array, pi_array, best_H, n_chains) {
   
   # Vectors to store the point estimates
   rhat_alpha <- numeric(best_H)
   rhat_beta  <- numeric(best_H)
+  rhat_pi    <- numeric(best_H)
   
   for (h in 1:best_H) {
     # --- Gelman-Rubin Diagnostic for Alpha ---
@@ -720,50 +746,103 @@ calculate_rhat_table <- function(alpha_array, beta_array, best_H, n_chains) {
     }
     gr_beta <- gelman.diag(as.mcmc.list(chain_list_beta), autoburnin = FALSE)
     rhat_beta[h] <- gr_beta$psrf[1, 1] # Extract Point Estimate
+    
+    # --- Gelman-Rubin Diagnostic for Pi (Weights) ---
+    chain_list_pi <- list()
+    for (c in 1:n_chains) {
+      chain_list_pi[[c]] <- mcmc(pi_array[h, , c])
+    }
+    gr_pi <- gelman.diag(as.mcmc.list(chain_list_pi), autoburnin = FALSE)
+    rhat_pi[h] <- gr_pi$psrf[1, 1] # Extract Point Estimate
   }
   
-  # 1. Generate clean variable names dynamically in the standard "parameter[index]" format
+  # 1. Generate clean variable names dynamically
   alpha_names <- paste0("alpha[", 1:best_H, "]")
   beta_names  <- paste0("beta[", 1:best_H, "]")
+  pi_names    <- paste0("pi[", 1:best_H, "]")
   
   # 2. Assemble everything into a single vertically aligned data frame
   rhat_table <- data.frame(
-    Variable = c(alpha_names, beta_names),
-    Raw_R_hat = round(c(rhat_alpha, rhat_beta), 4)
+    Variable = c(alpha_names, beta_names, pi_names),
+    Raw_R_hat = round(c(rhat_alpha, rhat_beta, rhat_pi), 4)
   )
   
   return(rhat_table)
 }
 
 # --- EXECUTION ---
-# Call the function passing the 3D raw sample arrays from JAGS
-rhat_table_output <- calculate_rhat_table(raw_samples$alpha, raw_samples$beta, best_H, n_chains)
+# Call the function passing the 3D raw sample arrays from JAGS (including pi_weights)
+rhat_table_output <- calculate_rhat_table(raw_samples$alpha, 
+                                          raw_samples$beta, 
+                                          raw_samples$pi_weights, 
+                                          best_H, 
+                                          n_chains)
 
 # Print the table without row numbers for a cleaner layout
 print(rhat_table_output, row.names = FALSE)
 ```
 
 \
-\
+As clearly visible in the trace and density plots for the raw parameters
+($\alpha$, $\beta$, and $\pi$), the sampling chains exhibit severe
+instability, with lines running on separate parallel tracks and
+multi-modal posterior densities. To formally quantify this issue, we
+computed the Gelman-Rubin diagnostic ($\hat{R}$) on these raw
+parameters, which spiked well above the standard 1.10 threshold. At this
+stage, such behavior could indicate either a genuine failure of the MCMC
+chains to converge or a lack of identifiability known as **Label
+Switching**.
 
-As clearly visible in the trace plots, the sampling chains lack
-identifiability, with lines frequently crossing or running on separate
-parallel tracks. This phenomenon, known as Label Switching, occurs
-because JAGS assigns component labels randomly and independently across
-different chains during the simulation.
+```{r}
+# 1. Estraiamo l'array della log-likelihood dal modello JAGS
+# Dimensioni: [N_osservazioni, Iterazioni, Catene]
+loglik_array <- raw_samples$log_lik
 
-To formally quantify this issue, we computed the **Gelman-Rubin
-diagnostic** ($\hat{R}$) on the raw parameters. Because Chain 1 and
-Chain 2 are trapped on inverted tracks, the variance between the chains
-is artificially inflated, causing the $\hat{R}$ values to spike well
-above the standard $1.1$ threshold (frequently exceeding $1.5$). This
-triggers a false alarm for non-convergence, even though the overall
-mixture geometry has fully converged. Taking a naive arithmetic average
-of these raw parameters would simply blend swapped labels together,
-creating non-existent 'Frankenstein' distributions.
+n_iter   <- dim(loglik_array)[2]
+n_chains <- dim(loglik_array)[3]
 
-To fix this, we order the mixture components at each MCMC step according
-to their theoretical expected value:
+# 2. Sommiamo la log-likelihood di tutte le N osservazioni per ottenere la Log-Likelihood Globale
+# La funzione apply con MARGIN = c(2, 3) somma sulle righe, restituendo una matrice [Iterazioni, Catene]
+global_loglik <- apply(loglik_array, c(2, 3), sum)
+
+# 3. Convertiamo la matrice in una lista MCMC compatibile con la libreria coda
+loglik_chains <- list()
+for (c in 1:n_chains) {
+  # Estraiamo la colonna corrispondente alla catena 'c'
+  loglik_chains[[c]] <- mcmc(global_loglik[, c])
+}
+loglik_mcmc_list <- as.mcmc.list(loglik_chains)
+
+# 4. Calcolo della diagnostica di convergenza
+rhat_loglik <- gelman.diag(loglik_mcmc_list, autoburnin = FALSE)$psrf[1, 1]
+ess_loglik  <- effectiveSize(loglik_mcmc_list)
+
+# 5. Creazione della tabella pulita per il report
+likelihood_diagnostic_table <- data.frame(
+  Metric = c("R-hat ", "ESS  "),
+  Value  = c(round(rhat_loglik, 4), round(ess_loglik, 2))
+)
+
+# Stampa finale
+cat("Likelihood Convergence Diagnostic (Permutation-Invariant Scale)\n\n")
+print(likelihood_diagnostic_table, row.names = FALSE)
+```
+
+To determine the true cause, we evaluated $\hat{R}$ and the Effective
+Sample Size (ESS) on the marginal log-likelihood. Because the overall
+log-likelihood is a global metric, it is inherently invariant to any
+permutation of the component labels. As shown in the convergence table,
+the log-likelihood achieves an $\hat{R}$ value very close to 1.00
+alongside a robust ESS. This proves that the model has successfully
+reached global convergence; the instability in the individual parameters
+is strictly an artifact of JAGS randomly swapping cluster labels across
+different chains. Taking a naive arithmetic average of these raw
+parameters would simply blend swapped labels together, creating
+mathematically distorted 'Frankenstein' distributions.
+
+To fix this and restore parameter identifiability, we order the mixture
+components at each MCMC step according to their theoretical expected
+value:
 
 $$\mathbb{E}[X_h] = \frac{\alpha_h}{\alpha_h + \beta_h}$$
 
