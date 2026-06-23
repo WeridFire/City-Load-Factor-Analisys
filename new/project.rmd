@@ -15,9 +15,9 @@ we share is a derived, pre-cleaned version. For each (day, hour) of the
 year we have computed the hourly mean of the **city-wide** active power
 $\overline{P}(d, h) = \mathrm{Zone1}(d, h) + \mathrm{Zone2}(d, h)
 + \mathrm{Zone3}(d, h)$ from the original 10-min readings, and then the
-**hourly load factor** $$
-\mathrm{LF}(d, h) = \frac{\overline{P}(d, h)}{\max_{h'} \overline{P}(d, h')}\,,
-$$ i.e. the ratio between the average load in hour $h$ and the highest
+**hourly load factor**
+$$\mathrm{LF}(d, h) = \frac{\overline{P}(d, h)}{\max_{h'} \overline{P}(d, h')}\,,$$
+i.e. the ratio between the average load in hour $h$ and the highest
 hourly average of the same day. By construction $\mathrm{LF}(d, h)
 \in [0, 1]$: the day-peak hour gets exactly $1$ and the deepest off-peak
 hour gets the smallest value. From the full $365 \times 24 \approx 8700$
@@ -87,14 +87,14 @@ $$f(x; \boldsymbol{\pi}, \boldsymbol{\alpha}, \boldsymbol{\beta}) = \sum_{h=1}^H
 
 ### Constraints and Parameters
 
--   **Mixture Weights (**$\pi_h$): Represent the probability of a data
-    point belonging to component $h$. They must satisfy the following
-    conditions:
-    $$\sum_{h=1}^H \pi_h = 1 \quad \text{and} \quad \pi_h \ge 0 \quad \forall h \in \{1, \dots, H\}$$
--   **Shape Parameters (**$\alpha_h, \beta_h$): Govern the geometry of
-    each individual Beta density within the mixture. They must be
-    strictly positive:
-    $$\alpha_h > 0, \quad \beta_h > 0 \quad \forall h \in \{1, \dots, H\}$$
+- **Mixture Weights (**$\pi_h$): Represent the probability of a data
+  point belonging to component $h$. They must satisfy the following
+  conditions:
+  $$\sum_{h=1}^H \pi_h = 1 \quad \text{and} \quad \pi_h \ge 0 \quad \forall h \in \{1, \dots, H\}$$
+- **Shape Parameters (**$\alpha_h, \beta_h$): Govern the geometry of
+  each individual Beta density within the mixture. They must be strictly
+  positive:
+  $$\alpha_h > 0, \quad \beta_h > 0 \quad \forall h \in \{1, \dots, H\}$$
 
 ### Component Density Function
 
@@ -184,19 +184,19 @@ We define the model hierarchically as follows:
 To complete the Bayesian setup, we must specify prior distributions for
 all unknown parameters:
 
--   **For the weights (**$\boldsymbol{\pi}$): We use a symmetric
-    **Dirichlet distribution**, which is the natural conjugate prior for
-    categorical probabilities that must sum to 1:
-    $$\boldsymbol{\pi} \sim \text{Dirichlet}(\mathbf{1}_H)$$ Where
-    $\mathbf{1}_H = [1, 1, \dots, 1]$ of length $H$. This represents a
-    flat, uninformative uniform prior over the probability simplex.
+- **For the weights (**$\boldsymbol{\pi}$): We use a symmetric
+  **Dirichlet distribution**, which is the natural conjugate prior for
+  categorical probabilities that must sum to 1:
+  $$\boldsymbol{\pi} \sim \text{Dirichlet}(\mathbf{1}_H)$$ Where
+  $\mathbf{1}_H = [1, 1, \dots, 1]$ of length $H$. This represents a
+  flat, uninformative uniform prior over the probability simplex.
 
--   **For the shape parameters (**$\alpha_h, \beta_h$): Since these
-    parameters must be strictly positive, we assign an **Exponential
-    distribution** with a small rate parameter $\lambda$:
-    $$\alpha_h \sim \text{Exponential}(\lambda), \quad \beta_h \sim \text{Exponential}(\lambda) \quad \forall h \in \{1, \dots, H\}$$
-    Setting $\lambda = 0.1$ ensures the prior is highly diffuse (weak),
-    allowing the data to fully drive the posterior estimation.
+- **For the shape parameters (**$\alpha_h, \beta_h$): Since these
+  parameters must be strictly positive, we assign an **Exponential
+  distribution** with a small rate parameter $\lambda$:
+  $$\alpha_h \sim \text{Exponential}(\lambda), \quad \beta_h \sim \text{Exponential}(\lambda) \quad \forall h \in \{1, \dots, H\}$$
+  Setting $\lambda = 0.1$ ensures the prior is highly diffuse (weak),
+  allowing the data to fully drive the posterior estimation.
 
 ## CODE
 
@@ -243,18 +243,18 @@ The following code basically tells JAGS what likelihood and priors to
 use, so that it can run MCMC simulations and estimate the posterior
 distribution.
 
--   The likelihood is defined as a Beta Mixture Mode.\
-    We introduce a latent categorical indicator $Z_i$ to assign each
-    observation $X_i$ to one of the $H$ components.
+- The likelihood is defined as a Beta Mixture Mode.\
+  We introduce a latent categorical indicator $Z_i$ to assign each
+  observation $X_i$ to one of the $H$ components.
 
--   We assign weakly informative priors to all unknown parameters.
-    Specifically, a symmetric Dirichlet prior is placed on the mixture
-    weights $\boldsymbol{\pi}$ to ensure they sum up to 1.
+- We assign weakly informative priors to all unknown parameters.
+  Specifically, a symmetric Dirichlet prior is placed on the mixture
+  weights $\boldsymbol{\pi}$ to ensure they sum up to 1.
 
--   For the shape parameters $\alpha_h$ and $\beta_h$, we use
-    Exponential priors with a small rate parameter ($\lambda = 0.1$).
-    This choice ensures the parameters remain strictly positive while
-    keeping the prior diffuse and uninformative.
+- For the shape parameters $\alpha_h$ and $\beta_h$, we use Exponential
+  priors with a small rate parameter ($\lambda = 0.1$). This choice
+  ensures the parameters remain strictly positive while keeping the
+  prior diffuse and uninformative.
 
 ```{r}
 jags_model_H1 <- "
@@ -303,9 +303,9 @@ model {
 Helper per il WAIC.
 
 **Punto chiave.** Per una mistura il WAIC va calcolato sulla likelihood
-**marginale** dell'osservazione, integrando via la latente $z$: $$
-\log p(x_i \mid \theta^{(s)}) = \log \sum_{h=1}^H \pi_h^{(s)}\,\text{Beta}(x_i \mid \alpha_h^{(s)}, \beta_h^{(s)}).
-$$ Usare invece la log-densità *condizionata* alla $z_i$ pescata a quel
+**marginale** dell'osservazione, integrando via la latente $z$:
+$$\log p(x_i \mid \theta^{(s)}) = \log \sum_{h=1}^H \pi_h^{(s)}\,\text{Beta}(x_i \mid \alpha_h^{(s)}, \beta_h^{(s)}).$$
+Usare invece la log-densità *condizionata* alla $z_i$ pescata a quel
 passo ($\log\text{Beta}(x_i\mid\alpha_{z_i},\beta_{z_i})$) risponde a
 un'altra domanda predittiva, gonfia $p_{\text{WAIC}}$ e premia troppi
 componenti. Come nel lab `03_mixtures`, calcoliamo `log_lik[i]` **dentro
@@ -349,16 +349,16 @@ Now its time to fit thoose models.
 
 We do this with the following hyperparams for the following reasons:
 
--   n chains = 2\
-    This because maybe the markow chain gets stuck somewhere on a local
-    max and we get biased data. With 2 jags start in 2 crazy different
-    points =\> less probability to get stuck.\
-    Ideally we would use 3/4 in the officials run
+- n chains = 2\
+  This because maybe the markow chain gets stuck somewhere on a local
+  max and we get biased data. With 2 jags start in 2 crazy different
+  points =\> less probability to get stuck.\
+  Ideally we would use 3/4 in the officials run
 
--   burnin = 1000\
-    Standard burnin
+- burnin = 1000\
+  Standard burnin
 
--   iterations = 2000
+- iterations = 2000
 
 H1
 
@@ -995,7 +995,7 @@ for (h in 1:best_H) {
        xlim = xlim_common, ylim = ylim_common,
        xlab = "Load factor", ylab = "Densità",
        main = paste("Componente", h))
-  legend("topright", bty = "n", cex = 0.9, text.col = cols[h],
+  legend("topleft", bty = "n", cex = 0.9, text.col = cols[h],
          legend = c(sprintf("peso  = %.3f", P[h, "mean"]),
                     sprintf("alpha = %.2f", A[h, "mean"]),
                     sprintf("beta  = %.2f", B[h, "mean"]),
@@ -1016,11 +1016,10 @@ recovered by the model selected in Task 1.
 
 The fully Bayesian overlay is the **posterior predictive density**,
 obtained by averaging the mixture density over the *entire* posterior
-(the latent $z$ is already integrated out inside each mixture term): $$
-p(\tilde x \mid \text{data})
+(the latent $z$ is already integrated out inside each mixture term):
+$$p(\tilde x \mid \text{data})
 = \frac{1}{S}\sum_{s=1}^S \sum_{h=1}^H
-  \pi_h^{(s)}\,\text{Beta}\!\left(\tilde x \mid \alpha_h^{(s)}, \beta_h^{(s)}\right).
-$$
+  \pi_h^{(s)}\,\text{Beta}\!\left(\tilde x \mid \alpha_h^{(s)}, \beta_h^{(s)}\right).$$
 
 We average the **densities**, not the parameters. This way the curve
 accounts for posterior uncertainty. A useful side effect: because each
@@ -1106,12 +1105,11 @@ studying how those assignments vary across hours of the day.
 MCMC draw (labels permute across iterations). Instead we compute
 **posterior responsibilities** using the components **re-ordered by
 their mean** at every draw (the same ordering used in the anatomy plot):
-$$
-r_{ih} = \frac{1}{S}\sum_{s=1}^S \frac{\pi^{(s)}_{(h)}\,\text{Beta}(x_i\mid\alpha^{(s)}_{(h)},\beta^{(s)}_{(h)})}{\sum_k \pi^{(s)}_{(k)}\,\text{Beta}(x_i\mid\alpha^{(s)}_{(k)},\beta^{(s)}_{(k)})},
-\qquad \hat z_i = \arg\max_h r_{ih},
-$$ where $(h)$ denotes the $h$-th component from the left (smallest
-mean). This makes "Component 1" consistently the lowest-mean component
-and the MAP assignment stable across chains.
+$$r_{ih} = \frac{1}{S}\sum_{s=1}^S \frac{\pi^{(s)}_{(h)}\,\text{Beta}(x_i\mid\alpha^{(s)}_{(h)},\beta^{(s)}_{(h)})}{\sum_k \pi^{(s)}_{(k)}\,\text{Beta}(x_i\mid\alpha^{(s)}_{(k)},\beta^{(s)}_{(k)})},
+\qquad \hat z_i = \arg\max_h r_{ih},$$
+where $(h)$ denotes the $h$-th component from the left (smallest mean).
+This makes "Component 1" consistently the lowest-mean component and the
+MAP assignment stable across chains.
 
 ```{r}
 best_samples <- all_samples[[best_H]]
@@ -1217,26 +1215,25 @@ model the log-odds of every other component against it.
 
 `hour` is a **cyclic** variable: hour $23$ is adjacent to hour $0$.
 Encoding it as a raw integer would wrongly treat midnight and 11pm as
-far apart, so we expand it on a **Fourier basis** of period $24$, $$
-s_{ik} = \sin\!\left(\frac{2\pi k\,\mathrm{hour}_i}{24}\right), \qquad
+far apart, so we expand it on a **Fourier basis** of period $24$,
+$$s_{ik} = \sin\!\left(\frac{2\pi k\,\mathrm{hour}_i}{24}\right), \qquad
 c_{ik} = \cos\!\left(\frac{2\pi k\,\mathrm{hour}_i}{24}\right),
-\qquad k = 1, \dots, K,
-$$ and use these $2K$ functions as covariates. A small number of
-harmonics $K$ is enough; we pick $K$ by WAIC, exactly as we chose $H$ in
-Task 1.
+\qquad k = 1, \dots, K,$$
+and use these $2K$ functions as covariates. A small number of harmonics
+$K$ is enough; we pick $K$ by WAIC, exactly as we chose $H$ in Task 1.
 
 ## Mathematical formulation
 
-For observation $i$ and component $h$ the linear predictor is $$
-\eta_{i,h} = \beta_{0,h} + \sum_{k=1}^{K}\bigl(\alpha_{k,h}\,s_{ik}
-            + \gamma_{k,h}\,c_{ik}\bigr),
-$$ with the reference class constrained to zero, $\beta_{0,1} = 0$ and
+For observation $i$ and component $h$ the linear predictor is
+$$\eta_{i,h} = \beta_{0,h} + \sum_{k=1}^{K}\bigl(\alpha_{k,h}\,s_{ik}
+            + \gamma_{k,h}\,c_{ik}\bigr),$$
+with the reference class constrained to zero, $\beta_{0,1} = 0$ and
 $\alpha_{k,1} = \gamma_{k,1} = 0$ for all $k$. The class probabilities
-are recovered with the **softmax** transform $$
-P(z_i = h) = \frac{\exp(\eta_{i,h})}{\sum_{j=1}^{H}\exp(\eta_{i,j})},
-$$ which automatically satisfies $\sum_h P(z_i = h) = 1$. By
-construction the predicted probabilities are **periodic** in `hour` with
-period $24$, exactly like the empirical curves of Task 3.
+are recovered with the **softmax** transform
+$$P(z_i = h) = \frac{\exp(\eta_{i,h})}{\sum_{j=1}^{H}\exp(\eta_{i,j})},$$
+which automatically satisfies $\sum_h P(z_i = h) = 1$. By construction
+the predicted probabilities are **periodic** in `hour` with period $24$,
+exactly like the empirical curves of Task 3.
 
 We place vague $\mathcal{N}(0, 0.01)$ priors (in JAGS precision
 parametrisation, i.e. variance $100$) on the $H - 1$ free coefficient
