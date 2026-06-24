@@ -1020,6 +1020,147 @@ par(mfrow = c(1, 1))
 
 ```
 
+# Prior Sensitivity Analysis
+
+The mixture model results depend on two hyperparameter choices: the rate
+$\lambda$ of the Exponential prior on the shape parameters ($\alpha_h,
+\beta_h$), and the concentration $c$ of the symmetric Dirichlet prior on
+the mixture weights $\boldsymbol{\pi}$. A sensitivity analysis checks
+whether these choices are driving the conclusions — specifically,
+whether the selected $H$, the inferred component shapes, and the WAIC
+change when the priors become more or less diffuse. If results are
+stable across settings the inference is data-driven; if they shift, the
+prior is influential and the choice requires more careful justification.
+
+We refit the best-$H$ model under four configurations, varying one
+hyperparameter at a time while holding the rest fixed:
+
+| Setting | $\lambda$ | Dir. conc. $c$ | Interpretation |
+|----|----|----|----|
+| **Reference** | 0.10 | 1.0 | Current prior: $\mathbb{E}[\alpha_h] = 10$ |
+| Very diffuse | 0.01 | 1.0 | Shape parameters up to $\sim\!200$ allowed |
+| Informative | 1.00 | 1.0 | Shape parameters concentrated near 1 |
+| Sparse Dirichlet | 0.10 | 0.1 | Encourages one dominant component |
+
+```{r}
+# Parameterised JAGS model: lambda_exp and dir_conc are passed as data,
+# so the same string works for any prior setting without editing the model.
+jags_model_sens <- "
+model {
+  for (i in 1:N) {
+    z[i] ~ dcat(pi_weights[1:H])
+    x[i] ~ dbeta(alpha[z[i]], beta[z[i]])
+    for (h in 1:H) {
+      lcomp[i, h] <- log(pi_weights[h]) + logdensity.beta(x[i], alpha[h], beta[h])
+    }
+    mx[i]      <- max(lcomp[i, 1:H])
+    for (h in 1:H) { e[i, h] <- exp(lcomp[i, h] - mx[i]) }
+    log_lik[i] <- mx[i] + log(sum(e[i, 1:H]))
+  }
+  pi_weights[1:H] ~ ddirch(dir_conc[1:H])
+  for (h in 1:H) {
+    alpha[h] ~ dexp(lambda_exp)
+    beta[h]  ~ dexp(lambda_exp)
+  }
+}
+"
+
+# Helper: fit best_H model with given hyperparameters
+fit_sensitivity <- function(H, lambda_exp, dir_conc_val) {
+  dat <- list(x          = my_data,
+              N          = N,
+              H          = H,
+              lambda_exp = lambda_exp,
+              dir_conc   = rep(dir_conc_val, H))
+  m <- jags.model(textConnection(jags_model_sens), data = dat,
+                  inits = make_inits(2), n.chains = 2, quiet = TRUE)
+  update(m, n.iter = 1000)
+  jags.samples(m, variable.names = c("pi_weights", "alpha", "beta", "log_lik"),
+               n.iter = 2000)
+}
+
+# Helper: label-switching-invariant posterior predictive density
+compute_ppd_sens <- function(samps, H, x_grid) {
+  pi_m <- matrix(samps$pi_weights, nrow = H)
+  al_m <- matrix(samps$alpha,      nrow = H)
+  be_m <- matrix(samps$beta,       nrow = H)
+  S    <- ncol(pi_m)
+  rowMeans(sapply(seq_len(S), function(s) {
+    d <- numeric(length(x_grid))
+    for (h in seq_len(H))
+      d <- d + pi_m[h, s] * dbeta(x_grid, al_m[h, s], be_m[h, s])
+    d
+  }))
+}
+```
+
+```{r}
+sens_settings <- list(
+  list(label = "Reference (λ=0.1, c=1.0)",     lambda = 0.10, dir = 1.0),
+  list(label = "Very diffuse (λ=0.01, c=1.0)", lambda = 0.01, dir = 1.0),
+  list(label = "Informative (λ=1.0, c=1.0)",   lambda = 1.00, dir = 1.0),
+  list(label = "Sparse Dir. (λ=0.1, c=0.1)",   lambda = 0.10, dir = 0.1)
+)
+
+# Setting 1 is already fitted as best_H in Task 1 — reuse it directly.
+# Settings 2-4 are refitted with the parameterised model above.
+sens_samples <- vector("list", length(sens_settings))
+sens_samples[[1]] <- all_samples[[best_H]]
+
+for (j in 2:length(sens_settings)) {
+  s <- sens_settings[[j]]
+  cat("Sensitivity fit:", s$label, "\n")
+  sens_samples[[j]] <- fit_sensitivity(best_H, s$lambda, s$dir)
+}
+
+# WAIC comparison table across prior settings
+sens_waic_objs <- lapply(sens_samples, function(sf)
+  waic_from_loglik(sf$log_lik))
+
+sens_table <- do.call(rbind, Map(function(w, nm) ic_row(w, nm),
+                                 sens_waic_objs,
+                                 sapply(sens_settings, `[[`, "label")))
+cat("\n--- PRIOR SENSITIVITY: WAIC for H =", best_H, "---\n")
+print(sens_table, row.names = FALSE)
+```
+
+```{r}
+# Overlay the posterior predictive density for each prior setting.
+# Because the PPD integrates out z it is invariant to label switching —
+# no re-ordering is needed here.
+x_grid_s  <- seq(0.001, 0.999, length.out = 500)
+sens_cols  <- c("midnightblue", "tomato", "darkgreen", "darkorange")
+sens_ltys  <- c(1, 2, 4, 3)
+sens_lwds  <- c(3, 2, 2, 2)
+
+ppd_list <- lapply(sens_samples, function(sf)
+  compute_ppd_sens(sf, best_H, x_grid_s))
+
+hist(my_data, breaks = 40, freq = FALSE,
+     col = "lightgray", border = "white",
+     xlab = "Load factor",
+     main = paste("Prior sensitivity — posterior predictive density (H =", best_H, ")"))
+
+for (j in seq_along(sens_settings)) {
+  lines(x_grid_s, ppd_list[[j]],
+        col  = sens_cols[j],
+        lwd  = sens_lwds[j],
+        lty  = sens_ltys[j])
+}
+
+legend("topright",
+       legend = sapply(sens_settings, `[[`, "label"),
+       col = sens_cols, lwd = sens_lwds, lty = sens_ltys,
+       bty = "n", cex = 0.8)
+```
+
+**Reading.** If the four curves largely overlap, the mixture shape is
+insensitive to the prior and the data are driving the inference. A curve
+that departs from the reference identifies a prior that is strong enough
+relative to the sample size to pull the posterior away from the
+likelihood. WAIC differences across settings reveal whether the prior
+also affects out-of-sample predictive accuracy.
+
 # Task 2
 
 Objective: overlay the **posterior predictive density** on the empirical
@@ -1470,3 +1611,150 @@ too small a $K$ would oversmooth genuine structure, too large a $K$
 would chase sampling noise. Overall, the close match confirms that the
 latent load shapes uncovered by the mixture are strongly and smoothly
 tied to the time of day.
+
+# Prediction Exercise
+
+The multinomial logistic regression of Task 4 was fitted on the same
+observations used to derive the response $\hat z_i$, so the WAIC is an
+in-sample criterion. A held-out prediction exercise provides an
+out-of-sample check: it quantifies how well the model generalises to
+unseen hour–component pairs and whether `hour` carries genuinely
+predictive information beyond the unconditional class frequencies.
+
+**Setup.** We randomly split the $N$ observations into a training set
+(80%) and a test set (20%), keeping the `hour`–`z_map` pairs aligned.
+The multinomial logit with $K = K_\text{best}$ harmonics is refitted on
+the training subset only. The resulting posterior is then used to
+predict the component label of each test observation from its `hour`.
+
+**Metric.** We report the **log-loss** on the test set,
+$$\text{log-loss} = -\frac{1}{N_\text{test}}\sum_{i \in \text{test}}
+  \log \hat{P}(z_i = \hat z_{\text{map},i} \mid \text{hour}_i),$$ and
+the **accuracy** (fraction of correctly predicted MAP labels). Both are
+compared against a **null baseline** that ignores `hour` entirely and
+always predicts the empirical class proportions observed in the training
+set. A model that beats the baseline confirms that time-of-day
+information improves prediction.
+
+```{r}
+set.seed(42)
+n_train_pred <- floor(0.8 * N)
+train_pred   <- sample(seq_len(N), n_train_pred)
+test_pred    <- setdiff(seq_len(N), train_pred)
+n_test_pred  <- length(test_pred)
+
+# Fourier design matrices for training and test subsets
+make_fourier <- function(h_vec, K, n) {
+  matrix(sapply(1:K, function(k) sin(2 * pi * k * h_vec / 24)),
+         nrow = n)
+}
+make_fourier_cos <- function(h_vec, K, n) {
+  matrix(sapply(1:K, function(k) cos(2 * pi * k * h_vec / 24)),
+         nrow = n)
+}
+
+S_tr <- make_fourier(    hours[train_pred], best_K, n_train_pred)
+C_tr <- make_fourier_cos(hours[train_pred], best_K, n_train_pred)
+S_te <- make_fourier(    hours[test_pred],  best_K, n_test_pred)
+C_te <- make_fourier_cos(hours[test_pred],  best_K, n_test_pred)
+
+# Refit the logit on the training subset only
+dat_tr <- list(z = z_map[train_pred], n = n_train_pred,
+               H = best_H, K = best_K, S = S_tr, C = C_tr)
+m_tr   <- jags.model(textConnection(jags_model_logit), data = dat_tr,
+                     inits = make_inits(2), n.chains = 2, quiet = TRUE)
+update(m_tr, n.iter = 1000)
+samp_tr <- jags.samples(m_tr,
+                        variable.names = c("beta0", "alpha", "gamma"),
+                        n.iter = 2000)
+```
+
+```{r}
+# Reshape posterior coefficient samples from the training fit
+beta0_tr <- matrix(samp_tr$beta0, nrow = best_H)
+S_tot_tr <- ncol(beta0_tr)
+alpha_tr <- array(samp_tr$alpha, dim = c(best_K, best_H, S_tot_tr))
+gamma_tr <- array(samp_tr$gamma, dim = c(best_K, best_H, S_tot_tr))
+
+# Posterior-mean predicted probabilities on the test set [n_test x H]
+P_te <- matrix(0, nrow = n_test_pred, ncol = best_H)
+for (s in seq_len(S_tot_tr)) {
+  eta <- matrix(0, nrow = n_test_pred, ncol = best_H)
+  for (h in seq_len(best_H))
+    eta[, h] <- beta0_tr[h, s] +
+                S_te %*% alpha_tr[, h, s] +
+                C_te %*% gamma_tr[, h, s]
+  ex   <- exp(eta)
+  P_te <- P_te + ex / rowSums(ex)
+}
+P_te <- P_te / S_tot_tr
+
+# --- Log-loss and accuracy ---
+z_te        <- z_map[test_pred]
+pred_probs  <- sapply(seq_len(n_test_pred), function(i) P_te[i, z_te[i]])
+log_loss_te <- -mean(log(pmax(pred_probs, 1e-10)))
+
+z_pred_te   <- apply(P_te, 1, which.max)
+acc_te      <- mean(z_pred_te == z_te)
+
+# --- Null baseline: empirical class proportions from training set ---
+train_props  <- tabulate(z_map[train_pred], nbins = best_H) / n_train_pred
+baseline_ll  <- -mean(log(pmax(train_props[z_te], 1e-10)))
+baseline_acc <- max(tabulate(z_map[train_pred])) / n_train_pred
+
+pred_table <- data.frame(
+  Metric   = c("Log-loss (lower is better)", "Accuracy (higher is better)"),
+  Model    = round(c(log_loss_te, acc_te),       3),
+  Baseline = round(c(baseline_ll, baseline_acc), 3)
+)
+cat("--- PREDICTION EXERCISE (test set, n =", n_test_pred, ") ---\n")
+print(pred_table, row.names = FALSE)
+```
+
+```{r}
+# Compare probability curves from the train-only fit against the
+# empirical fractions derived from the full data in Task 3.
+# Close agreement means the model generalises: the periodic pattern
+# learned on 80% of the data reproduces the full-data proportions.
+hour_grid_p <- 0:23
+Sg_p <- make_fourier(    hour_grid_p, best_K, length(hour_grid_p))
+Cg_p <- make_fourier_cos(hour_grid_p, best_K, length(hour_grid_p))
+
+P_grid <- matrix(0, nrow = length(hour_grid_p), ncol = best_H)
+for (s in seq_len(S_tot_tr)) {
+  eta <- matrix(0, nrow = length(hour_grid_p), ncol = best_H)
+  for (h in seq_len(best_H))
+    eta[, h] <- beta0_tr[h, s] +
+                Sg_p %*% alpha_tr[, h, s] +
+                Cg_p %*% gamma_tr[, h, s]
+  ex     <- exp(eta)
+  P_grid <- P_grid + ex / rowSums(ex)
+}
+P_grid <- P_grid / S_tot_tr
+
+cols_pred <- c("black", "darkgreen", "purple", "darkorange", "brown")
+matplot(0:23, as.matrix(frac_mat), type = "p", pch = 19,
+        col = cols_pred[1:best_H], ylim = c(0, 1),
+        xlab = "Hour of day",
+        ylab = "Fraction / predicted probability",
+        main = "Prediction exercise — train-fitted logit vs empirical fractions (full data)")
+matlines(hour_grid_p, P_grid, lty = 1, lwd = 2.5, col = cols_pred[1:best_H])
+legend("topright",
+       legend = c(paste("Component", 1:best_H),
+                  "Empirical fractions (full data)", "Logit (train fit only)"),
+       col = c(cols_pred[1:best_H], "gray40", "gray40"),
+       pch = c(rep(19, best_H), 19, NA),
+       lty = c(rep(NA,  best_H), NA,  1),
+       lwd = c(rep(NA,  best_H), NA,  2.5),
+       bty = "n", cex = 0.85)
+```
+
+**Reading.** A log-loss below the baseline confirms that `hour` is
+genuinely informative: knowing the time of day improves the prediction
+of the load-shape component beyond the unconditional class frequencies.
+The accuracy gap over the baseline quantifies the practical gain. The
+plot compares the probability curves estimated from the 80% training
+subset against the empirical fractions from the full data (Task 3):
+close agreement indicates that the learned periodic pattern is not an
+artefact of the specific training observations and the model generalises
+well to unseen hour–component pairs.
