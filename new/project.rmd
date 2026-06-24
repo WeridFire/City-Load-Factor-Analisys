@@ -87,14 +87,14 @@ $$f(x; \boldsymbol{\pi}, \boldsymbol{\alpha}, \boldsymbol{\beta}) = \sum_{h=1}^H
 
 ### Constraints and Parameters
 
-- **Mixture Weights (**$\pi_h$): Represent the probability of a data
-  point belonging to component $h$. They must satisfy the following
-  conditions:
-  $$\sum_{h=1}^H \pi_h = 1 \quad \text{and} \quad \pi_h \ge 0 \quad \forall h \in \{1, \dots, H\}$$
-- **Shape Parameters (**$\alpha_h, \beta_h$): Govern the geometry of
-  each individual Beta density within the mixture. They must be strictly
-  positive:
-  $$\alpha_h > 0, \quad \beta_h > 0 \quad \forall h \in \{1, \dots, H\}$$
+-   **Mixture Weights (**$\pi_h$): Represent the probability of a data
+    point belonging to component $h$. They must satisfy the following
+    conditions:
+    $$\sum_{h=1}^H \pi_h = 1 \quad \text{and} \quad \pi_h \ge 0 \quad \forall h \in \{1, \dots, H\}$$
+-   **Shape Parameters (**$\alpha_h, \beta_h$): Govern the geometry of
+    each individual Beta density within the mixture. They must be
+    strictly positive:
+    $$\alpha_h > 0, \quad \beta_h > 0 \quad \forall h \in \{1, \dots, H\}$$
 
 ### Component Density Function
 
@@ -184,19 +184,19 @@ We define the model hierarchically as follows:
 To complete the Bayesian setup, we must specify prior distributions for
 all unknown parameters:
 
-- **For the weights (**$\boldsymbol{\pi}$): We use a symmetric
-  **Dirichlet distribution**, which is the natural conjugate prior for
-  categorical probabilities that must sum to 1:
-  $$\boldsymbol{\pi} \sim \text{Dirichlet}(\mathbf{1}_H)$$ Where
-  $\mathbf{1}_H = [1, 1, \dots, 1]$ of length $H$. This represents a
-  flat, uninformative uniform prior over the probability simplex.
+-   **For the weights (**$\boldsymbol{\pi}$): We use a symmetric
+    **Dirichlet distribution**, which is the natural conjugate prior for
+    categorical probabilities that must sum to 1:
+    $$\boldsymbol{\pi} \sim \text{Dirichlet}(\mathbf{1}_H)$$ Where
+    $\mathbf{1}_H = [1, 1, \dots, 1]$ of length $H$. This represents a
+    flat, uninformative uniform prior over the probability simplex.
 
-- **For the shape parameters (**$\alpha_h, \beta_h$): Since these
-  parameters must be strictly positive, we assign an **Exponential
-  distribution** with a small rate parameter $\lambda$:
-  $$\alpha_h \sim \text{Exponential}(\lambda), \quad \beta_h \sim \text{Exponential}(\lambda) \quad \forall h \in \{1, \dots, H\}$$
-  Setting $\lambda = 0.1$ ensures the prior is highly diffuse (weak),
-  allowing the data to fully drive the posterior estimation.
+-   **For the shape parameters (**$\alpha_h, \beta_h$): Since these
+    parameters must be strictly positive, we assign an **Exponential
+    distribution** with a small rate parameter $\lambda$:
+    $$\alpha_h \sim \text{Exponential}(\lambda), \quad \beta_h \sim \text{Exponential}(\lambda) \quad \forall h \in \{1, \dots, H\}$$
+    Setting $\lambda = 0.1$ ensures the prior is highly diffuse (weak),
+    allowing the data to fully drive the posterior estimation.
 
 ## CODE
 
@@ -243,25 +243,26 @@ The following code basically tells JAGS what likelihood and priors to
 use, so that it can run MCMC simulations and estimate the posterior
 distribution.
 
-- The likelihood is defined as a Beta Mixture Mode.\
-  We introduce a latent categorical indicator $Z_i$ to assign each
-  observation $X_i$ to one of the $H$ components.
+-   The likelihood is defined as a Beta Mixture Mode.\
+    We introduce a latent categorical indicator $Z_i$ to assign each
+    observation $X_i$ to one of the $H$ components.
 
-- We assign weakly informative priors to all unknown parameters.
-  Specifically, a symmetric Dirichlet prior is placed on the mixture
-  weights $\boldsymbol{\pi}$ to ensure they sum up to 1.
+-   We assign weakly informative priors to all unknown parameters.
+    Specifically, a symmetric Dirichlet prior is placed on the mixture
+    weights $\boldsymbol{\pi}$ to ensure they sum up to 1.
 
-- For the shape parameters $\alpha_h$ and $\beta_h$, we use Exponential
-  priors with a small rate parameter ($\lambda = 0.1$). This choice
-  ensures the parameters remain strictly positive while keeping the
-  prior diffuse and uninformative.
+-   For the shape parameters $\alpha_h$ and $\beta_h$, we use
+    Exponential priors with a small rate parameter ($\lambda = 0.1$).
+    This choice ensures the parameters remain strictly positive while
+    keeping the prior diffuse and uninformative.
 
 ```{r}
+# Model with H=1
 jags_model_H1 <- "
 model {
   for (i in 1:N) {
     x[i] ~ dbeta(alpha, beta)
-    # Con un solo componente la log-lik marginale = la log-densita' Beta.
+    # Note that with a single component the marginal log-lik is the log density of the Beta
     log_lik[i] <- logdensity.beta(x[i], alpha, beta)
   }
   alpha ~ dexp(0.1)
@@ -272,6 +273,7 @@ model {
 # Model for H > 1 (Beta Mixture Model with Latent Variable Z)
 jags_model_mix <- "
 model {
+  # Used from JAGS gibb's sampler
   for (i in 1:N) {
     z[i] ~ dcat(pi_weights[1:H])
     x[i] ~ dbeta(alpha[z[i]], beta[z[i]])
@@ -288,6 +290,8 @@ model {
     }
     log_lik[i] <- mx[i] + log(sum(e[i, 1:H]))
   }
+  
+  
   # Uninformative Dirichlet prior for mixture weights
   pi_weights[1:H] ~ ddirch(ones[1:H])
 
@@ -349,16 +353,16 @@ Now its time to fit thoose models.
 
 We do this with the following hyperparams for the following reasons:
 
-- n chains = 2\
-  This because maybe the markow chain gets stuck somewhere on a local
-  max and we get biased data. With 2 jags start in 2 crazy different
-  points =\> less probability to get stuck.\
-  Ideally we would use 3/4 in the officials run
+-   n chains = 2\
+    This because maybe the markow chain gets stuck somewhere on a local
+    max and we get biased data. With 2 jags start in 2 crazy different
+    points =\> less probability to get stuck.\
+    Ideally we would use 3/4 in the officials run
 
-- burnin = 1000\
-  Standard burnin
+-   burnin = 1000\
+    Standard burnin
 
-- iterations = 2000
+-   iterations = 2000
 
 H1
 
@@ -607,10 +611,19 @@ if (best_H > 1) {
 
 ## MCMC Diagnostics: The Label Switching Problem
 
+In a mixture model the $H$ components are **exchangeable**: permuting
+their labels leaves the joint likelihood unchanged, so the posterior has
+up to $H!$ equivalent modes — one for each relabelling of the same
+solution. When two MCMC chains independently explore different
+permutations, the raw parameter traces cross and swap between
+iterations, a phenomenon known as **label switching**. Naively averaging
+parameters across such chains would blend draws from different
+permutations, producing meaningless component summaries.
+
 Although the overall mixture density accurately captures the empirical
-data, directly averaging the parameters across all MCMC iterations (as
-done above) can be misleading. To understand why, we must inspect the
-MCMC trace plots.
+data, directly averaging the raw component parameters across all MCMC
+iterations can therefore be misleading. To diagnose whether label
+switching is occurring, we inspect the trace plots.
 
 ```{r}
 
@@ -782,16 +795,15 @@ rhat_table_output <- calculate_rhat_table(raw_samples$alpha,
 print(rhat_table_output, row.names = FALSE)
 ```
 
-\
-As clearly visible in the trace and density plots for the raw parameters
-($\alpha$, $\beta$, and $\pi$), the sampling chains exhibit severe
-instability, with lines running on separate parallel tracks and
-multi-modal posterior densities. To formally quantify this issue, we
-computed the Gelman-Rubin diagnostic ($\hat{R}$) on these raw
-parameters, which spiked well above the standard 1.10 threshold. At this
-stage, such behavior could indicate either a genuine failure of the MCMC
-chains to converge or a lack of identifiability known as **Label
-Switching**.
+The traces show the characteristic label-switching signature: chains
+running on separate tracks that occasionally cross, and multimodal
+marginal densities for each raw component parameter. The $\hat{R}$
+values in the table above, several of which exceed the conventional 1.10
+threshold, formally confirm this instability. At this point two
+explanations are possible: the chains genuinely failed to mix and
+explore the posterior, or the high $\hat{R}$ is a statistical artifact
+caused by the chains sampling from different — but equivalent — label
+permutations of a well-mixed sampler.
 
 ```{r}
 # 1. Estraiamo l'array della log-likelihood dal modello JAGS
@@ -828,30 +840,32 @@ cat("Likelihood Convergence Diagnostic (Permutation-Invariant Scale)\n\n")
 print(likelihood_diagnostic_table, row.names = FALSE)
 ```
 
-To determine the true cause, we evaluated $\hat{R}$ and the Effective
-Sample Size (ESS) on the marginal log-likelihood. Because the overall
-log-likelihood is a global metric, it is inherently invariant to any
-permutation of the component labels. As shown in the convergence table,
-the log-likelihood achieves an $\hat{R}$ value very close to 1.00
-alongside a robust ESS. This proves that the model has successfully
-reached global convergence; the instability in the individual parameters
-is strictly an artifact of JAGS randomly swapping cluster labels across
-different chains. Taking a naive arithmetic average of these raw
-parameters would simply blend swapped labels together, creating
-mathematically distorted 'Frankenstein' distributions.
+To distinguish between the two explanations, we evaluate $\hat{R}$ and
+the Effective Sample Size (ESS) on the **marginal log-likelihood**
+$\ell^{(s)} = \sum_{i=1}^N \log p(x_i \mid \boldsymbol{\theta}^{(s)})$.
+This scalar is a function of the full mixture density — which is
+invariant to any relabelling of the components — so it is unaffected by
+label switching. The table above shows $\hat{R} \approx 1$ and a healthy
+ESS, confirming that the sampler has reached global convergence. The
+instability in the raw component parameters is therefore purely an
+artifact of the chains sampling from different label permutations of the
+same posterior mode.
 
-To fix this and restore parameter identifiability, we order the mixture
-components at each MCMC step according to their theoretical expected
-value:
+To restore parameter identifiability for reporting, we apply a
+**post-hoc re-labelling**: at each MCMC draw we sort the $H$ components
+by their theoretical Beta mean,
 
-$$\mathbb{E}[X_h] = \frac{\alpha_h}{\alpha_h + \beta_h}$$
+$$\mathbb{E}[X_h] = \frac{\alpha_h}{\alpha_h + \beta_h},$$
 
-We dynamically align the parameters from left to right, compute the
-densities for these sorted components, and average the curves
-themselves. This guarantees that 'Component 1' is consistently the
-leftmost distribution across all samples and chains, completely
-neutralizing the label-switching effect, collapsing the R-hat values
-back to 1.00, and revealing the true anatomy of the latent subgroups.
+from smallest to largest. This criterion is the natural choice because
+$\mathbb{E}[X_h]$ is the "location" of component $h$ on the $(0,1)$
+interval: it identifies whether a component captures low, medium, or
+high load-factor observations regardless of which numeric label JAGS
+happened to assign at that step. After re-ordering, "Component 1"
+consistently refers to the lowest-mean Beta across all draws and chains,
+making per-component summaries comparable. This post-hoc step does not
+alter the fit: the mixture density and the WAIC are unchanged; it only
+resolves the label ambiguity for interpretation.
 
 ```{r}
 
@@ -1106,10 +1120,10 @@ MCMC draw (labels permute across iterations). Instead we compute
 **posterior responsibilities** using the components **re-ordered by
 their mean** at every draw (the same ordering used in the anatomy plot):
 $$r_{ih} = \frac{1}{S}\sum_{s=1}^S \frac{\pi^{(s)}_{(h)}\,\text{Beta}(x_i\mid\alpha^{(s)}_{(h)},\beta^{(s)}_{(h)})}{\sum_k \pi^{(s)}_{(k)}\,\text{Beta}(x_i\mid\alpha^{(s)}_{(k)},\beta^{(s)}_{(k)})},
-\qquad \hat z_i = \arg\max_h r_{ih},$$
-where $(h)$ denotes the $h$-th component from the left (smallest mean).
-This makes "Component 1" consistently the lowest-mean component and the
-MAP assignment stable across chains.
+\qquad \hat z_i = \arg\max_h r_{ih},$$ where $(h)$ denotes the $h$-th
+component from the left (smallest mean). This makes "Component 1"
+consistently the lowest-mean component and the MAP assignment stable
+across chains.
 
 ```{r}
 best_samples <- all_samples[[best_H]]
@@ -1218,16 +1232,16 @@ Encoding it as a raw integer would wrongly treat midnight and 11pm as
 far apart, so we expand it on a **Fourier basis** of period $24$,
 $$s_{ik} = \sin\!\left(\frac{2\pi k\,\mathrm{hour}_i}{24}\right), \qquad
 c_{ik} = \cos\!\left(\frac{2\pi k\,\mathrm{hour}_i}{24}\right),
-\qquad k = 1, \dots, K,$$
-and use these $2K$ functions as covariates. A small number of harmonics
-$K$ is enough; we pick $K$ by WAIC, exactly as we chose $H$ in Task 1.
+\qquad k = 1, \dots, K,$$ and use these $2K$ functions as covariates. A
+small number of harmonics $K$ is enough; we pick $K$ by WAIC, exactly as
+we chose $H$ in Task 1.
 
 ## Mathematical formulation
 
 For observation $i$ and component $h$ the linear predictor is
 $$\eta_{i,h} = \beta_{0,h} + \sum_{k=1}^{K}\bigl(\alpha_{k,h}\,s_{ik}
-            + \gamma_{k,h}\,c_{ik}\bigr),$$
-with the reference class constrained to zero, $\beta_{0,1} = 0$ and
+            + \gamma_{k,h}\,c_{ik}\bigr),$$ with the reference class
+constrained to zero, $\beta_{0,1} = 0$ and
 $\alpha_{k,1} = \gamma_{k,1} = 0$ for all $k$. The class probabilities
 are recovered with the **softmax** transform
 $$P(z_i = h) = \frac{\exp(\eta_{i,h})}{\sum_{j=1}^{H}\exp(\eta_{i,j})},$$
