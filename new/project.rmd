@@ -231,7 +231,7 @@ lf_fit <- lf[idx, ]                 # sottoinsieme usato per il fit (con 'hour')
 # TRUCCO PER JAGS:
 # La Beta non è definita esattamente in 0 o 1 (log(0) è indefinito).
 # Schiacciamo impercettibilmente i valori estremi appena dentro (0, 1).
-my_data <- pmax(pmin(lf_fit$load_factor, 1 - 1e-6), 1e-6)
+my_data <- pmax(lf_fit$load_factor)
 N <- length(my_data)
 ```
 
@@ -1036,7 +1036,7 @@ We refit the best-$H$ model under four configurations, varying one
 hyperparameter at a time while holding the rest fixed:
 
 | Setting | $\lambda$ | Dir. conc. $c$ | Interpretation |
-|----|----|----|----|
+|------------------|------------------|------------------|------------------|
 | **Reference** | 0.10 | 1.0 | Current prior: $\mathbb{E}[\alpha_h] = 10$ |
 | Very diffuse | 0.01 | 1.0 | Shape parameters up to $\sim\!200$ allowed |
 | Informative | 1.00 | 1.0 | Shape parameters concentrated near 1 |
