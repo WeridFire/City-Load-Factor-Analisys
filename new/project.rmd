@@ -347,6 +347,20 @@ ic_row <- function(w, nm) {
              WAIC  = round(e["waic",      "Estimate"], 1),
              SE    = round(e["waic",      "SE"],       1))
 }
+
+# Parsimonious model selection within one standard error of the best WAIC.
+# A bare which.min always chases the lowest point estimate, even when the
+# gap to a simpler model is smaller than the sampling noise of the WAIC.
+# Instead we take the lowest WAIC, build a threshold one SE above it, and
+# among all candidates whose WAIC falls below that threshold we return the
+# simplest one (smallest complexity value, e.g. fewest components/harmonics).
+# Returns the index of the chosen candidate within the supplied vectors.
+select_parsimonious <- function(waic_values, waic_se, complexity, n_se = 1) {
+  best      <- which.min(waic_values)
+  threshold <- waic_values[best] + n_se * waic_se[best]
+  tied      <- which(waic_values <= threshold)
+  tied[which.min(complexity[tied])]
+}
 ```
 
 Now its time to fit thoose models.
@@ -476,10 +490,12 @@ print(waic_table, row.names = FALSE)
 cat("\n--- loo_compare (differences vs the best model) ---\n")
 print(loo_compare(waic_objs))
 
-best_model <- which.min(all_waic_values)
-cat("\n>>> Lowest-WAIC model: H =", best_model, "components <<<\n")
-cat("    (models within ~1-2 se_diff of the top row are statistically tied;\n",
-    "    prefer the simplest among them.)\n")
+lowest_H <- which.min(all_waic_values)
+chosen_H <- select_parsimonious(all_waic_values, waic_se, complexity = 1:5)
+cat("\n>>> Lowest-WAIC model: H =", lowest_H, "components\n")
+cat(">>> Parsimonious choice (within 1 SE): H =", chosen_H, "components <<<\n")
+cat("    (models within 1 SE of the lowest WAIC are statistically tied;\n",
+    "    we keep the simplest among them rather than the bare which.min.)\n")
 ```
 
 ## Now visualize some data.
@@ -503,11 +519,15 @@ axis(1, at = 1:5)
 arrows(1:5, all_waic_values - waic_se, 1:5, all_waic_values + waic_se,
        angle = 90, code = 3, length = 0.05, col = "steelblue")
 
-# Highlight the lowest-WAIC model
-best_H <- which.min(all_waic_values)
-points(best_H, all_waic_values[best_H], col = "tomato", pch = 1, cex = 3, lwd = 3)
-legend("topright", legend = paste("Lowest WAIC: H =", best_H),
-       text.col = "tomato", bty = "n")
+# Parsimonious choice: simplest model within 1 SE of the lowest WAIC
+lowest_H <- which.min(all_waic_values)
+best_H   <- select_parsimonious(all_waic_values, waic_se, complexity = 1:5)
+points(lowest_H, all_waic_values[lowest_H], col = "gray60", pch = 1, cex = 3, lwd = 2)
+points(best_H,   all_waic_values[best_H],   col = "tomato", pch = 19, cex = 1.8)
+legend("topright",
+       legend = c(paste("Lowest WAIC: H =", lowest_H),
+                  paste("Chosen (1 SE): H =", best_H)),
+       text.col = c("gray60", "tomato"), bty = "n")
 ```
 
 Lets see how the different models compare with the data
@@ -1498,9 +1518,11 @@ print(logit_table, row.names = FALSE)
 cat("\n--- loo_compare (differences vs the best model) ---\n")
 print(loo_compare(waic_klist))
 
-best_K <- K_grid[which.min(waic_logit)]
-cat("\n>>> Lowest-WAIC number of harmonics: K =", best_K, "<<<\n")
-cat("    (K within ~1-2 se_diff of the top row are tied; prefer the smallest.)\n")
+lowest_K <- K_grid[which.min(waic_logit)]
+best_K   <- K_grid[select_parsimonious(waic_logit, waic_logit_se, complexity = K_grid)]
+cat("\n>>> Lowest-WAIC number of harmonics: K =", lowest_K, "\n")
+cat(">>> Parsimonious choice (within 1 SE): K =", best_K, "<<<\n")
+cat("    (K within 1 SE of the lowest WAIC are tied; we keep the smallest.)\n")
 ```
 
 The WAIC-vs-$K$ curve with $\pm 1$ SE bars, to read the elbow directly:
@@ -1515,10 +1537,14 @@ plot(K_grid, waic_logit, type = "b", pch = 19, cex = 1.4,
 axis(1, at = K_grid)
 arrows(K_grid, waic_logit - waic_logit_se, K_grid, waic_logit + waic_logit_se,
        angle = 90, code = 3, length = 0.05, col = "steelblue")
-points(best_K, waic_logit[which.min(waic_logit)],
-       col = "tomato", pch = 1, cex = 3, lwd = 3)
-legend("topright", legend = paste("Lowest WAIC: K =", best_K),
-       text.col = "tomato", bty = "n")
+points(lowest_K, waic_logit[which.min(waic_logit)],
+       col = "gray60", pch = 1, cex = 3, lwd = 2)
+points(best_K, waic_logit[which(K_grid == best_K)],
+       col = "tomato", pch = 19, cex = 1.8)
+legend("topright",
+       legend = c(paste("Lowest WAIC: K =", lowest_K),
+                  paste("Chosen (1 SE): K =", best_K)),
+       text.col = c("gray60", "tomato"), bty = "n")
 ```
 
 ## Predicted probability curves
