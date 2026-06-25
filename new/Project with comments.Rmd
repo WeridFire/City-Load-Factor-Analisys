@@ -1,0 +1,1943 @@
+---
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+
+```{r}
+library(rjags)
+library(loo)
+library(coda)
+```
+
+**Data.** Data file: `data/hourly_load_factor.csv` (2000 rows). The CSV
+we share is a derived, pre-cleaned version. For each (day, hour) of the
+year we have computed the hourly mean of the **city-wide** active power
+$\overline{P}(d, h) = \mathrm{Zone1}(d, h) + \mathrm{Zone2}(d, h)
++ \mathrm{Zone3}(d, h)$ from the original 10-min readings, and then the
+**hourly load factor**
+$$\mathrm{LF}(d, h) = \frac{\overline{P}(d, h)}{\max_{h'} \overline{P}(d, h')}\,,$$
+i.e. the ratio between the average load in hour $h$ and the highest
+hourly average of the same day. By construction $\mathrm{LF}(d, h)
+\in [0, 1]$: the day-peak hour gets exactly $1$ and the deepest off-peak
+hour gets the smallest value. From the full $365 \times 24 \approx 8700$
+(day, hour) cells we have taken a uniform random subsample of 2000 rows
+and clamped the values to $(10^{-3},\, 1 - 10^{-3})$ so that the Beta
+log-density is finite at the boundary.
+
+Variables:
+
+`date` : calendar date (M/D/YYYY).
+
+`hour` : hour of the day, integer in $\{0, \dots, 23\}$.
+
+`load_factor` : hourly load factor as defined above, in
+$(10^{-3},\, 1 - 10^{-3})$.
+
+**Task.**
+
+1.  Compare a single Beta vs Beta mixture model with
+    $H = 1, 2, 3, 4, 5$, with model selection via WAIC.
+
+2.  Overlay the posterior predictive density on the empirical histogram
+    and verify that the modes are recovered.
+
+3.  **Post-hoc exploration.** Assign each observation to its
+    maximum-a-posteriori component, then plot the empirical fraction of
+    observations in each component as a function of `hour`.
+
+4.  **Advanced.** Fit a second model which does classification on `hour`
+    using the component assignment as response variable, and plot the
+    predicted probability of each component as a function of `hour`. Do
+    the two plots match? Discuss the results. (Details for this step are
+    presented in the additional details notebook) We will predict the
+    component assignment using a multinomial logistic regression with
+    the Fourier-transformed `hour` as covariate, i.e. with predictors
+    $\sin(k 2\pi h / 24)$ and $\cos(k 2\pi h / 24)$ to capture the
+    periodicity of the day.
+
+```{r}
+rm(list=ls())
+lf = read.csv("data/hourly_load_factor.csv")
+dim(lf); head(lf); summary(lf$load_factor)
+
+hist(lf$load_factor, breaks = 35, freq = FALSE,
+     col = "tomato", border = "white",
+     xlab = "Load factor (hourly / daily peak)",
+     main = "Hourly city load factor — empirical density (n = 2000)")
+lines(density(lf$load_factor, from = 0.01, to = 0.99),
+      col = "darkorange", lwd = 2)
+```
+
+# Task 1
+
+Objective: Compare a single Beta vs Beta mixture model with
+$H = 1, 2, 3, 4, 5$, with model selection via WAIC
+
+## Mathematical Formulation: Beta Mixture Model (BMM)
+
+A **Beta Mixture Model** with $H$ components expresses the probability
+density function (PDF) of a continuous random variable $X$ (where
+$X \in (0,1)$) as a convex combination of $H$ distinct Beta
+distributions.
+
+The overall density function is defined as:
+
+$$f(x; \boldsymbol{\pi}, \boldsymbol{\alpha}, \boldsymbol{\beta}) = \sum_{h=1}^H \pi_h \cdot \text{Beta}(x; \alpha_h, \beta_h)$$
+
+### Constraints and Parameters
+
+-   **Mixture Weights (**$\pi_h$): Represent the probability of a data
+    point belonging to component $h$. They must satisfy the following
+    conditions:
+    $$\sum_{h=1}^H \pi_h = 1 \quad \text{and} \quad \pi_h \ge 0 \quad \forall h \in \{1, \dots, H\}$$
+-   **Shape Parameters (**$\alpha_h, \beta_h$): Govern the geometry of
+    each individual Beta density within the mixture. They must be
+    strictly positive:
+    $$\alpha_h > 0, \quad \beta_h > 0 \quad \forall h \in \{1, \dots, H\}$$
+
+### Component Density Function
+
+Each individual component $h$ is a standard Beta distribution with the
+following PDF:
+
+$$\text{Beta}(x; \alpha_h, \beta_h) = \frac{1}{\text{B}(\alpha_h, \beta_h)} x^{\alpha_h - 1} (1 - x)^{\beta_h - 1}$$
+
+Where $\text{B}(\alpha_h, \beta_h)$ is the **Beta Function**, which acts
+as a normalizing constant and is defined using the Gamma function
+($\Gamma$):
+
+$$\text{B}(\alpha_h, \beta_h) = \frac{\Gamma(\alpha_h)\Gamma(\beta_h)}{\Gamma(\alpha_h + \beta_h)} = \int_{0}^{1} t^{\alpha_h - 1}(1 - t)^{\beta_h - 1} dt$$
+
+## Model Selection via WAIC (Widely Applicable Information Criterion)
+
+To determine the optimal number of components $H \in \{1, \dots, 5\}$,
+we use **WAIC**, a fully Bayesian criterion that estimates the
+out-of-sample predictive accuracy. It is particularly suited for mixture
+models because it accounts for the entire posterior distribution rather
+than a single point estimate.
+
+WAIC is defined as:
+
+$$\text{WAIC} = -2 \cdot (\text{lppd} - p_{\text{WAIC}})$$
+
+Where: \* $\text{lppd}$ is the **log pointwise predictive density**,
+which measures how well the model fits the observed data. \*
+$p_{\text{WAIC}}$ is the **effective number of parameters**, acting as a
+penalty for model complexity to prevent overfitting.
+
+### 1. Log Pointwise Predictive Density (lppd)
+
+Given $n$ data points and $S$ posterior samples drawn from the MCMC
+chains, the $\text{lppd}$ is calculated by averaging the likelihood of
+each data point across all posterior samples, and then taking the log:
+
+$$\text{lppd} = \sum_{i=1}^n \ln \left( \frac{1}{S} \sum_{s=1}^S f(x_i; \boldsymbol{\theta}^s) \right)$$
+
+Where $f(x_i; \boldsymbol{\theta}^s)$ is the Beta Mixture density
+evaluated at data point $x_i$ using the parameters
+$\boldsymbol{\theta}^s = \{\boldsymbol{\pi}^s, \boldsymbol{\alpha}^s, \boldsymbol{\beta}^s\}$
+from the $s$-th posterior draw.
+
+### 2. Effective Number of Parameters ($p_{\text{WAIC}}$)
+
+The penalty term computes the posterior variance of the log-likelihood
+for each data point individually, summing them up. This captures how
+sensitive the model is to the posterior uncertainty:
+
+$$p_{\text{WAIC}} = \sum_{i=1}^n \mathcal{V}_{s=1}^S \Big( \ln f(x_i; \boldsymbol{\theta}^s) \Big)$$
+
+Where $\mathcal{V}_{s=1}^S$ denotes the sample variance over the $S$
+posterior simulations:
+
+$$\mathcal{V}_{s=1}^S \Big( \ln f(x_i; \boldsymbol{\theta}^s) \Big) = \frac{1}{S-1} \sum_{s=1}^S \left( \ln f(x_i; \boldsymbol{\theta}^s) - \frac{1}{S}\sum_{j=1}^S \ln f(x_i; \boldsymbol{\theta}^j) \right)^2$$
+
+## JAGS Model
+
+### The Bayesian Formulation with Latent Variables (JAGS Approach)
+
+In practice, we do not know which component generated which data point.
+To solve this in a Bayesian framework using JAGS, we introduce a
+**latent discrete variable** $z_i$ for each observation $x_i$.
+
+The variable $z_i \in \{1, \dots, H\}$ acts as a classification label or
+"indicator", telling us which sub-population the $i$-th data point
+belongs to.
+
+#### Hierarchical Model Structure
+
+We define the model hierarchically as follows:
+
+1.  **Latent Assignment (**$z_i$):
+    $$z_i \sim \text{Categorical}(\boldsymbol{\pi})$$ This means each
+    data point is randomly assigned to a component based on the
+    probabilities defined by the mixture weights
+    $\boldsymbol{\pi} = [\pi_1, \dots, \pi_H]$.
+
+2.  **Conditional Likelihood (**$x_i \mid z_i$):
+    $$x_i \mid z_i \sim \text{Beta}(\alpha_{z_i}, \beta_{z_i})$$ Once
+    the component $z_i$ is assigned, the actual data point $x_i$ is
+    sampled from that specific Beta distribution.
+
+#### Prior Distributions
+
+To complete the Bayesian setup, we must specify prior distributions for
+all unknown parameters:
+
+-   **For the weights (**$\boldsymbol{\pi}$): We use a symmetric
+    **Dirichlet distribution**, which is the natural conjugate prior for
+    categorical probabilities that must sum to 1:
+    $$\boldsymbol{\pi} \sim \text{Dirichlet}(\mathbf{1}_H)$$ Where
+    $\mathbf{1}_H = [1, 1, \dots, 1]$ of length $H$. This represents a
+    flat, uninformative uniform prior over the probability simplex.
+
+-   **For the shape parameters (**$\alpha_h, \beta_h$): Since these
+    parameters must be strictly positive, we assign an **Exponential
+    distribution** with a small rate parameter $\lambda$:
+    $$\alpha_h \sim \text{Exponential}(\lambda), \quad \beta_h \sim \text{Exponential}(\lambda) \quad \forall h \in \{1, \dots, H\}$$
+    Setting $\lambda = 0.1$ ensures the prior is highly diffuse (weak),
+    allowing the data to fully drive the posterior estimation.
+
+## CODE
+
+Importiamo i dati. Per la run *finale* usiamo tutti i 2000 dati; per i
+test rapidi basta mettere `use_subsample <- TRUE` (così non ci mettiamo
+ore a runnare). Fissiamo il seed per riproducibilità e teniamo `hour`
+allineato a `my_data` (servirà per il clustering su z).
+
+```{r}
+# Fissa il seed del generatore di numeri pseudocasuali di R.
+# Garantisce la riproducibilità di operazioni R-native come il campionamento (sample).
+set.seed(123)
+
+# Definizione di una closure/funzione per inizializzare le catene MCMC in JAGS.
+# Risolve il problema del non-determinismo del sampler di JAGS tra diverse esecuzioni.
+make_inits <- function(n_chains, seed0 = 123) {
+  # seq_len(n_chains) genera un vettore di interi da 1 a n_chains (es. 1, 2, 3, 4).
+  # lapply itera su questo vettore e applica la funzione anonima a ogni catena 'c'.
+  lapply(seq_len(n_chains), function(c)
+    # Per ogni catena, restituisce una lista con i parametri speciali richiesti da JAGS
+    # per forzare l'algoritmo PRNG (Mersenne-Twister) e un seed univoco per catena.
+    list(.RNG.name = "base::Mersenne-Twister", .RNG.seed = seed0 + c))
+}
+
+# Flag booleano per lo switch di configurazione:
+# TRUE attiva il prototyping rapido su un subset, FALSE avvia il sampling completo.
+use_subsample <- TRUE   
+n_sub <- 400            # Dimensione del subset per il testing.
+
+# Controllo del flusso per la creazione dell'indice di campionamento.
+if (use_subsample) {
+  # sample() estrae casualmente n_sub indici senza reinserimento.
+  # nrow(lf) restituisce il numero di righe del dataframe originario 'lf'.
+  idx <- sample(seq_len(nrow(lf)), n_sub)
+} else {
+  # Se FALSE, genera la sequenza completa di indici da 1 a fine dataframe.
+  idx <- seq_len(nrow(lf))
+}
+
+# Slice del dataframe originale: estrae solo le righe corrispondenti agli indici calcolati.
+lf_fit <- lf[idx, ]                 
+
+# Trasformazione per vincoli di supporto della distribuzione Beta.
+# Poiché il supporto della Beta è (0, 1) esclusi gli estremi, valori pari a 0 o 1 
+# causerebbero un fallimento nel calcolo della verosimiglianza (Log-Likelihood indefinita).
+# pmin e pmax agiscono "element-wise" sul vettore:
+# 1. pmin(..., 1 - 1e-6) sostituisce ogni valore >= 1 con 0.999999
+# 2. pmax(..., 1e-6) sostituisce ogni valore <= 0 con 0.000001
+my_data <- pmax(pmin(lf_fit$load_factor, 1 - 1e-6), 1e-6)
+
+# Memorizza la cardinalità del dataset (numero di osservazioni) da passare a JAGS 
+# come costante per i cicli for nei blocchi di model spec.
+N <- length(my_data)
+```
+
+Then we define the JAGS models. Since is a bit tricky JAGS with the
+dimesionality we need two different definitions one for H1 and one
+parametric for the others.
+
+The following code basically tells JAGS what likelihood and priors to
+use, so that it can run MCMC simulations and estimate the posterior
+distribution.
+
+-   The likelihood is defined as a Beta Mixture Mode.\
+    We introduce a latent categorical indicator $Z_i$ to assign each
+    observation $X_i$ to one of the $H$ components.
+
+-   We assign weakly informative priors to all unknown parameters.
+    Specifically, a symmetric Dirichlet prior is placed on the mixture
+    weights $\boldsymbol{\pi}$ to ensure they sum up to 1.
+
+-   For the shape parameters $\alpha_h$ and $\beta_h$, we use
+    Exponential priors with a small rate parameter ($\lambda = 0.1$).
+    This choice ensures the parameters remain strictly positive while
+    keeping the prior diffuse and uninformative.
+
+```{r}
+jags_model_H1 <- "
+model {
+  # Ciclo sulle N osservazioni del dataset
+  for (i in 1:N) {
+    # Likelihood: la variabile x[i] segue una distribuzione Beta globale
+    x[i] ~ dbeta(alpha, beta)
+    
+    # Calcolo della Log-Likelihood puntuale per il calcolo di WAIC o LOO.
+    # Essendoci una sola componente, coincide con la log-densita della Beta.
+    log_lik[i] <- logdensity.beta(x[i], alpha, beta)
+  }
+  
+  # Prior per i parametri di forma della Beta stimati globalmente.
+  # dexp(0.1) in JAGS usa la parametrizzazione tramite tasso rate = 0.1, 
+  # che corrisponde a una media di 1 diviso 0.1 ovvero 10.
+  alpha ~ dexp(0.1)
+  beta  ~ dexp(0.1)
+}
+"
+
+# Model for H > 1 (Beta Mixture Model with Latent Variable Z)
+jags_model_mix <- "
+model {
+  # Ciclo sulle N osservazioni del dataset
+  for (i in 1:N) {
+    # Processo Generativo Latente: assegna losservazione i-esima a una delle H componenti.
+    # dcat e una distribuzione categoriale discreta basata sul vettore delle probabilita pi_weights.
+    z[i] ~ dcat(pi_weights[1:H])
+    
+    # Likelihood condizionata: x[i] segue la Beta specifica della componente z[i] estratta.
+    x[i] ~ dbeta(alpha[z[i]], beta[z[i]])
+
+    # CALCOLO DELLA LOG-LIKELIHOOD MARGINALE (INTEGRAZIONE DELLA VARIABILE LATENTE Z)
+    # Per criteri di informazione come WAIC o LOO serve la log-verosimiglianza marginale.
+    
+    # Step 1: Calcolo del logaritmo di ogni singolo addendo della sommatoria per la componente h
+    for (h in 1:H) {
+      # log(pi_h * Beta_h) = log(pi_h) + log(Beta_h)
+      lcomp[i, h] <- log(pi_weights[h]) + logdensity.beta(x[i], alpha[h], beta[h])
+    }
+    
+    # TRUCCO NUMERICO LOG-SUM-EXP STABILIZATION
+    # Calcolare direttamente exp(lcomp) causerebbe underflow numerico.
+    # Si estrae il valore massimo tra le H componenti per scalarle.
+    mx[i] <- max(lcomp[i, 1:H])
+    
+    # Step 2: Sottrazione del massimo ed esponenziazione. 
+    # Almeno una componente avra e[i, h] = exp(0) = 1, azzerando il rischio di underflow.
+    for (h in 1:H) {
+      e[i, h] <- exp(lcomp[i, h] - mx[i])
+    }
+    
+    # Step 3: Ricostruzione della Log-Likelihood marginale.
+    # LogSumExp(V) = max(V) + log(sum(exp(V - max(V))))
+    log_lik[i] <- mx[i] + log(sum(e[i, 1:H]))
+  }
+  
+  # Prior per i pesi della mistura.
+  # ddirch definisce una distribuzione di Dirichlet sul vettore pi_weights.
+  # Richiede un vettore ones di iperparametri per una Dirichlet piatta.
+  pi_weights[1:H] ~ ddirch(ones[1:H])
+
+  # Prior indipendenti per i parametri di forma di ciascuna delle H componenti.
+  for (h in 1:H) {
+    alpha[h] ~ dexp(0.1)
+    beta[h]  ~ dexp(0.1)
+  }
+}
+"
+```
+
+Helper per il WAIC.
+
+**Punto chiave.** Per una mistura il WAIC va calcolato sulla likelihood
+**marginale** dell'osservazione, integrando via la latente $z$:
+$$\log p(x_i \mid \theta^{(s)}) = \log \sum_{h=1}^H \pi_h^{(s)}\,\text{Beta}(x_i \mid \alpha_h^{(s)}, \beta_h^{(s)}).$$
+Usare invece la log-densità *condizionata* alla $z_i$ pescata a quel
+passo ($\log\text{Beta}(x_i\mid\alpha_{z_i},\beta_{z_i})$) risponde a
+un'altra domanda predittiva, gonfia $p_{\text{WAIC}}$ e premia troppi
+componenti. Come nel lab `03_mixtures`, calcoliamo `log_lik[i]` **dentro
+JAGS** con il trucco log-sum-exp (stabile numericamente) e lo
+monitoriamo; qui l'helper si limita a impilare i campioni nella forma
+$[S \times N]$ che `loo::waic` si aspetta. Vantaggio collaterale: la
+densità marginale è invariante per permutazione delle etichette, quindi
+questo WAIC è **immune al label switching**.
+
+```{r}
+jags_model_H1 <- "
+model {
+  # Ciclo sulle N osservazioni del dataset
+  for (i in 1:N) {
+    # Likelihood: la variabile x[i] segue una distribuzione Beta globale
+    x[i] ~ dbeta(alpha, beta)
+    
+    # Calcolo della Log-Likelihood puntuale per il calcolo di WAIC o LOO.
+    # Essendoci una sola componente, coincide con la log-densita della Beta.
+    log_lik[i] <- logdensity.beta(x[i], alpha, beta)
+  }
+  
+  # Prior per i parametri di forma della Beta stimati globalmente.
+  # dexp(0.1) in JAGS usa la parametrizzazione tramite tasso rate = 0.1, 
+  # che corrisponde a una media di 1 diviso 0.1 ovvero 10.
+  alpha ~ dexp(0.1)
+  beta  ~ dexp(0.1)
+}
+"
+
+# Model for H > 1 (Beta Mixture Model with Latent Variable Z)
+jags_model_mix <- "
+model {
+  # Ciclo sulle N osservazioni del dataset
+  for (i in 1:N) {
+    # Processo Generativo Latente: assegna losservazione i-esima a una delle H componenti.
+    # dcat e una distribuzione categoriale discreta basata sul vettore delle probabilita pi_weights.
+    z[i] ~ dcat(pi_weights[1:H])
+    
+    # Likelihood condizionata: x[i] segue la Beta specifica della componente z[i] estratta.
+    x[i] ~ dbeta(alpha[z[i]], beta[z[i]])
+
+    # CALCOLO DELLA LOG-LIKELIHOOD MARGINALE (INTEGRAZIONE DELLA VARIABILE LATENTE Z)
+    # Per criteri di informazione come WAIC o LOO serve la log-verosimiglianza marginale.
+    
+    # Step 1: Calcolo del logaritmo di ogni singolo addendo della sommatoria per la componente h
+    for (h in 1:H) {
+      # log(pi_h * Beta_h) = log(pi_h) + log(Beta_h)
+      lcomp[i, h] <- log(pi_weights[h]) + logdensity.beta(x[i], alpha[h], beta[h])
+    }
+    
+    # TRUCCO NUMERICO LOG-SUM-EXP STABILIZATION
+    # Calcolare direttamente exp(lcomp) causerebbe underflow numerico.
+    # Si estrae il valore massimo tra le H componenti per scalarle.
+    mx[i] <- max(lcomp[i, 1:H])
+    
+    # Step 2: Sottrazione del massimo ed esponenziazione. 
+    # Almeno una componente avra e[i, h] = exp(0) = 1, azzerando il rischio di underflow.
+    for (h in 1:H) {
+      e[i, h] <- exp(lcomp[i, h] - mx[i])
+    }
+    
+    # Step 3: Ricostruzione della Log-Likelihood marginale.
+    # LogSumExp(V) = max(V) + log(sum(exp(V - max(V))))
+    log_lik[i] <- mx[i] + log(sum(e[i, 1:H]))
+  }
+  
+  # Prior per i pesi della mistura.
+  # ddirch definisce una distribuzione di Dirichlet sul vettore pi_weights.
+  # Richiede un vettore ones di iperparametri per una Dirichlet piatta.
+  pi_weights[1:H] ~ ddirch(ones[1:H])
+
+  # Prior indipendenti per i parametri di forma di ciascuna delle H componenti.
+  for (h in 1:H) {
+    alpha[h] ~ dexp(0.1)
+    beta[h]  ~ dexp(0.1)
+  }
+}
+"
+```
+
+Now its time to fit thoose models.
+
+We do this with the following hyperparams for the following reasons:
+
+-   n chains = 2\
+    This because maybe the markow chain gets stuck somewhere on a local
+    max and we get biased data. With 2 jags start in 2 crazy different
+    points =\> less probability to get stuck.\
+    Ideally we would use 3/4 in the officials run
+
+-   burnin = 1000\
+    Standard burnin
+
+-   iterations = 2000
+
+H1
+
+```{r}
+# Stampa a console un messaggio per tracciare lavanzamento dello script.
+cat("Fitting Model H = 1...\n")
+
+# Creazione della lista contenente i dati strutturati richiesti dal modello JAGS.
+# Mappa il vettore dei dati scalati e la costante N definiti in precedenza.
+jags_data_H1 <- list(x = my_data, N = N)
+
+# Compilazione del modello gerarchico bayesiano.
+# textConnection permette di passare la stringa del modello come se fosse un file.
+# inits chiama la funzione make_inits creando un seed deterministico per le 2 catene.
+# quiet = TRUE disattiva i log nativi di compilazione di JAGS sulla console di R.
+model_H1 <- jags.model(textConnection(jags_model_H1), data = jags_data_H1, inits = make_inits(2), n.chains = 2, quiet = TRUE)
+
+# Fase di Burn-in (o riscaldamento).
+# Esegue 1000 iterazioni MCMC che verranno scartate. Servono a fare convergere 
+# le catene dalla posizione iniziale verso la zona ad alta densita della posterior.
+update(model_H1, n.iter = 1000)
+
+# Campionamento effettivo dalla distribuzione a posteriori.
+# Monitora e memorizza i vettori dei parametri alpha, beta e la matrice log_lik.
+# Vengono estratte 2000 iterazioni salvate per ogni catena, utili per linferenza.
+samples_H1 <- jags.samples(model_H1, variable.names = c("alpha", "beta", "log_lik"), n.iter = 2000)
+
+# Calcolo dellindice WAIC passando la matrice tridimensionale log_lik estratta.
+# Sfrutta la funzione compute_waic_from_loglik definita in precedenza.
+waic_H1 <- compute_waic_from_loglik(samples_H1$log_lik)
+
+# Stampa a console il valore numerico finale ottenuto per il WAIC del modello H=1.
+cat("WAIC for H = 1:", waic_H1, "\n")
+```
+
+H2
+
+```{r}
+# Stampa a console un messaggio per tracciare lavanzamento dello script.
+cat("Fitting Model H = 2...\n")
+
+# Creazione della lista contenente i dati strutturati per il modello di mistura.
+# H = 2 definisce il numero di componenti della mistura.
+# ones = rep(1, 2) crea un vettore di due elementi pari a 1, ovvero c(1, 1).
+# Questo vettore viene passato alla Dirichlet come iperparametro per una prior piatta.
+jags_data_H2 <- list(x = my_data, N = N, H = 2, ones = rep(1, 2))
+
+# Compilazione del modello gerarchico bayesiano di mistura (jags_model_mix).
+# textConnection permette di passare la stringa del modello come se fosse un file.
+# inits chiama la funzione make_inits creando un seed deterministico per le 2 catene.
+# quiet = TRUE disattiva i log nativi di compilazione di JAGS sulla console di R.
+model_H2 <- jags.model(textConnection(jags_model_mix), data = jags_data_H2, inits = make_inits(2), n.chains = 2, quiet = TRUE)
+
+# Fase di Burn-in (o riscaldamento).
+# Esegue 1000 iterazioni MCMC che verranno scartate. Servono a fare convergere 
+# le catene dalla posizione iniziale verso la zona ad alta densita della posterior.
+update(model_H2, n.iter = 1000)
+
+# Campionamento effettivo dalla distribuzione a posteriori del modello a due componenti.
+# Monitora e memorizza i vettori dei pesi pi_weights, i parametri alpha e beta delle H 
+# componenti e la matrice log_lik marginalizzata per il calcolo dei criteri informativi.
+samples_H2 <- jags.samples(model_H2, variable.names = c("pi_weights", "alpha", "beta", "log_lik"), n.iter = 2000)
+
+# Calcolo dellindice WAIC passando la matrice tridimensionale log_lik estratta.
+# Sfrutta la funzione compute_waic_from_loglik definita in precedenza.
+waic_H2 <- compute_waic_from_loglik(samples_H2$log_lik)
+
+# Stampa a console il valore numerico finale ottenuto per il WAIC del modello H=2.
+cat("WAIC for H = 2:", waic_H2, "\n")
+```
+
+H3
+
+```{r}
+cat("Fitting Model H = 3...\n")
+
+jags_data_H3 <- list(x = my_data, N = N, H = 3, ones = rep(1, 3))
+model_H3 <- jags.model(textConnection(jags_model_mix), data = jags_data_H3, inits = make_inits(2), n.chains = 2, quiet = TRUE)
+
+update(model_H3, n.iter = 1000)
+samples_H3 <- jags.samples(model_H3, variable.names = c("pi_weights", "alpha", "beta", "log_lik"), n.iter = 2000)
+
+waic_H3 <- compute_waic_from_loglik(samples_H3$log_lik)
+cat("WAIC for H = 3:", waic_H3, "\n")
+```
+
+H4
+
+```{r}
+cat("Fitting Model H = 4...\n")
+
+jags_data_H4 <- list(x = my_data, N = N, H = 4, ones = rep(1, 4))
+model_H4 <- jags.model(textConnection(jags_model_mix), data = jags_data_H4, inits = make_inits(2), n.chains = 2, quiet = TRUE)
+
+update(model_H4, n.iter = 1000)
+samples_H4 <- jags.samples(model_H4, variable.names = c("pi_weights", "alpha", "beta", "log_lik"), n.iter = 2000)
+
+waic_H4 <- compute_waic_from_loglik(samples_H4$log_lik)
+cat("WAIC for H = 4:", waic_H4, "\n")
+```
+
+H5
+
+```{r}
+cat("Fitting Model H = 5...\n")
+
+jags_data_H5 <- list(x = my_data, N = N, H = 5, ones = rep(1, 5))
+model_H5 <- jags.model(textConnection(jags_model_mix), data = jags_data_H5, inits = make_inits(2), n.chains = 2, quiet = TRUE)
+
+update(model_H5, n.iter = 1000)
+samples_H5 <- jags.samples(model_H5, variable.names = c("pi_weights", "alpha", "beta", "log_lik"), n.iter = 2000)
+
+waic_H5 <- compute_waic_from_loglik(samples_H5$log_lik)
+cat("WAIC for H = 5:", waic_H5, "\n")
+```
+
+**Reading the WAIC, not just its minimum.** A single WAIC number hides
+its sampling uncertainty: the WAIC of each model carries a standard
+error (SE), and two models whose WAIC differ by less than roughly
+$1$–$2$ SE are statistically *indistinguishable*. We therefore report,
+as the lab does, the full table with `ELPD`, the effective number of
+parameters `p_eff` ($= p_{\text{WAIC}}$, the complexity penalty), `WAIC`
+and its `SE`, and we run `loo_compare`, which ranks the models and gives
+the pairwise `elpd_diff` together with its `se_diff`. When several $H$
+are tied within the noise, the honest choice is the **most
+parsimonious** among them rather than the bare `which.min`.
+
+```{r}
+# Costruisce una lista contenente gli oggetti WAIC completi per tutti i modelli stimati.
+# Per ogni modello da H=1 a H=5, estrae la log-likelihood campionata da JAGS
+# e calcola l'oggetto strutturato del pacchetto loo tramite waic_from_loglik.
+waic_objs <- list(
+  "H=1" = waic_from_loglik(samples_H1$log_lik),
+  "H=2" = waic_from_loglik(samples_H2$log_lik),
+  "H=3" = waic_from_loglik(samples_H3$log_lik),
+  "H=4" = waic_from_loglik(samples_H4$log_lik),
+  "H=5" = waic_from_loglik(samples_H5$log_lik)
+)
+
+# sapply cicla sulla lista waic_objs ed estrae un vettore numerico non arrotondato.
+# Seleziona dalla matrice estimates la riga waic e la colonna Estimate.
+# Questo vettore viene usato per identificare matematicamente il minimo o per fare plot.
+all_waic_values <- sapply(waic_objs, function(w) w$estimates["waic", "Estimate"])
+
+# Estrae analogamente il vettore degli Standard Error (SE) associati al WAIC di ogni modello.
+# Utile per calcolare intervalli di confidenza o barre di errore nei grafici.
+waic_se         <- sapply(waic_objs, function(w) w$estimates["waic", "SE"])
+
+# Genera la tabella comparativa finale unendo i dataframe delle singole righe.
+# Map applica la funzione ic_row definita in precedenza a ogni coppia oggetto-nome della lista.
+# do.call con rbind concatena verticalmente le righe generate da Map in un unico dataframe.
+waic_table <- do.call(rbind, Map(ic_row, waic_objs, names(waic_objs)))
+
+# Stampa a console l'intestazione della sezione di Model Selection.
+cat("--- MODEL SELECTION: WAIC with standard errors ---\n")
+
+# Mostra la tabella comparativa formattata nascondendo gli indici di riga predefiniti di R.
+print(waic_table, row.names = FALSE)
+
+# Esegue il confronto a coppie sulla scala predittiva usando la funzione nativa di loo.
+# Ordina i modelli dal migliore (in alto, con elpd_diff = 0) ai peggiori, mostrando 
+# la differenza di ELPD (elpd_diff) e il relativo Standard Error della differenza (se_diff).
+cat("\n--- loo_compare (differences vs the best model) ---\n")
+print(loo_compare(waic_objs))
+
+# Identifica l'indice numerico del modello che ha minimizzato il valore di WAIC.
+best_model <- which.min(all_waic_values)
+
+# Stampa a console il verdetto numerico del modello ottimale secondo il criterio del minimo.
+cat("\n>>> Lowest-WAIC model: H =", best_model, "components <<<\n")
+
+# Nota metodologica stampata a console per ricordare che modelli con elpd_diff ridotto 
+# rispetto al SE della differenza sono statisticamente equivalenti, favorendo la parsimonia.
+cat("    (models within ~1-2 se_diff of the top row are statistically tied;\n",
+    "    prefer the simplest among them.)\n")
+```
+
+## Now visualize some data.
+
+Waic value over the all the fittings.
+
+```{r}
+# Calcola i limiti dellasse Y includendo lincertezza dello Standard Error.
+# range() trova il minimo assoluto e il massimo assoluto combinando i vettori:
+# 1. all_waic_values - waic_se (limite inferiore delle barre)
+# 2. all_waic_values + waic_se (limite superiore delle barre)
+ylim_waic <- range(c(all_waic_values - waic_se, all_waic_values + waic_se))
+
+# Genera il grafico principale di tipo scatter con linee di giunzione.
+# type = b specifica sia punti che linee, pch = 19 imposta i cerchi pieni.
+# cex = 1.5 ingrandisce i punti, lwd = 2 ispessisce la linea spezzata.
+# ylim applica i limiti calcolati per evitare che le barre escano dal grafico.
+# xaxt = n sopprime lasse X predefinito per permettere una formattazione custom.
+plot(1:5, all_waic_values,
+     type = "b", pch = 19, cex = 1.5, col = "steelblue", lwd = 2,
+     ylim = ylim_waic,
+     xlab = "Number of Components (H)",
+     ylab = "WAIC (lower is better)",
+     main = "Model Selection: WAIC by Number of Components (bars = +/-1 SE)",
+     xaxt = "n")
+
+# Disegna lasse X personalizzato posizionando i tick esattamente sui numeri interi da 1 a 5.
+axis(1, at = 1:5)
+
+# Aggiunge le barre di errore +/- 1 Standard Error utilizzando la funzione arrows.
+# angle = 90 rende le punte delle frecce piatte, creando il classico look a barra.
+# code = 3 indica di disegnare la barra piatta su entrambi gli estremi.
+# length = 0.05 definisce lampiezza orizzontale del baffo della barra di errore.
+arrows(1:5, all_waic_values - waic_se, 1:5, all_waic_values + waic_se,
+       angle = 90, code = 3, length = 0.05, col = "steelblue")
+
+# Estrae lindice del modello ottimale (quello con il WAIC piu basso).
+best_H <- which.min(all_waic_values)
+
+# Sovrappone un cerchio vuoto piu grande per evidenziare visivamente il modello migliore.
+# pch = 1 imposta il cerchio vuoto, col = tomato usa il rosso, cex = 3 triplica la dimensione.
+points(best_H, all_waic_values[best_H], col = "tomato", pch = 1, cex = 3, lwd = 3)
+
+# Aggiunge la legenda testuale nellangolo in alto a destra.
+# paste() concatena dinamicamente la stringa con il valore ottimale di componenti.
+# bty = n rimuove il bordo della scatola della legenda per renderla minimal.
+legend("topright", legend = paste("Lowest WAIC: H =", best_H),
+       text.col = "tomato", bty = "n")
+```
+
+Lets see how the different models compare with the data
+
+```{r}
+# Raggruppa gli oggetti MCMC restituiti da jags.samples in una lista indicizzabile.
+# Permette di iterare linearmente sui 5 modelli allinterno del ciclo for.
+all_samples <- list(samples_H1, samples_H2, samples_H3, samples_H4, samples_H5)
+
+# Configura la matrice dei grafici (layout) della finestra grafica corrente.
+# mfrow = c(2, 3) alloca una griglia con 2 righe e 3 colonne (6 slot totali, usati 5).
+# mar imposta i margini dei singoli sotto-grafici nellordine: basso, sinistra, alto, destra.
+par(mfrow = c(2, 3), mar = c(4, 4, 3, 1))
+
+# Genera una griglia equispaziata di 500 punti tra 0.001 e 0.999.
+# Rappresenta lasse X continuo su cui calcolare il profilo delle funzioni di densita Beta.
+x_seq <- seq(0.001, 0.999, length.out = 500)
+
+# Inizio del ciclo for per analizzare e plottare i risultati da H=1 a H=5.
+for (h in 1:5) {
+  
+  # 1. Estrazione delle medie a posteriori per il modello corrente h.
+  current_samples <- all_samples[[h]]
+  
+  # Gestione condizionale della dimensionalita per separare H=1 (scalari) da H>1 (vettori).
+  if (h == 1) {
+    # Per il modello singolo, il peso della componente e banalmente 1 (100 percento).
+    est_pi <- 1
+    # mean calcola la media empirica di tutte le iterazioni salvate per alpha e beta.
+    est_alpha <- mean(current_samples$alpha)
+    est_beta <- mean(current_samples$beta)
+  } else {
+    # Per i modelli di mistura, i parametri estratti sono matrici con shape [H, iterazioni*catene].
+    # apply con MARGIN = 1 calcola la media lungo le righe per isolare il valore medio di
+    # ogni singola componente c del modello.
+    est_pi <- apply(current_samples$pi_weights, 1, mean)
+    est_alpha <- apply(current_samples$alpha, 1, mean)
+    est_beta <- apply(current_samples$beta, 1, mean)
+  }
+  
+  # 2. Generazione dellistogramma empirico dei dati osservati.
+  # freq = FALSE forza la visualizzazione della densita di probabilita invece del conteggio.
+  # col e border definiscono la palette minimalista (grigio chiaro con separatori bianchi).
+  # paste concatena dinamicamente il numero di componenti h nel titolo del grafico.
+  hist(my_data, breaks = 30, freq = FALSE,
+       col = "lightgray", border = "white",
+       xlab = "Load Factor", main = paste("Fit with H =", h))
+  
+  # 3. Calcolo e disegno della densita totale della mistura (funzione predittiva).
+  # Inizializza un vettore di 500 zeri corrispondente ai punti definiti in x_seq.
+  total_density <- rep(0, 500)
+  
+  # Ciclo interno per sommare i contributi pesati di ciascuna delle h componenti.
+  for (c in 1:h) {
+    # Applica la legge delle probabilita totali: combina linearmente le densita Beta
+    # pesandole per la probabilita di allocazione a posteriori est_pi della componente c.
+    total_density <- total_density + est_pi[c] * dbeta(x_seq, est_alpha[c], est_beta[c])
+  }
+  
+  # Sovrappone allistogramma corrente la linea continua della densita teorica stimata.
+  # col = steelblue applica il colore, lwd = 2.5 imposta lo spessore della linea.
+  lines(x_seq, total_density, col = "steelblue", lwd = 2.5)
+}
+
+# Ripristina i parametri dellambiente grafico di R ai valori standard di default.
+# Chiude la griglia multigrafico, impostando lo slot a schermo intero (1 riga, 1 colonna).
+par(mfrow = c(1, 1))
+```
+
+The optimal model:
+
+```{r}
+# Estrae loggetto contenente i campionamenti MCMC associati al modello selezionato (best_H).
+# Sfrutta il super-indice calcolato tramite il criterio del minimo WAIC.
+best_samples <- all_samples[[best_H]]
+
+# Blocco condizionale per calcolare i punti di stima centrali (medie della posterior).
+if (best_H == 1) {
+  # Configurazione a componente singola: il peso pi e necessariamente unitario.
+  best_pi <- 1
+  best_alpha <- mean(best_samples$alpha)
+  best_beta <- mean(best_samples$beta)
+} else {
+  # Configurazione a mistura: calcola il vettore delle medie marginali per ogni 
+  # parametro lungo lasse delle componenti (MARGIN = 1).
+  best_pi <- apply(best_samples$pi_weights, 1, mean)
+  best_alpha <- apply(best_samples$alpha, 1, mean)
+  best_beta <- apply(best_samples$beta, 1, mean)
+}
+
+# Stampa a console lintestazione dei risultati per il modello ottimale.
+cat("\n--- POSTERIOR MEANS OF THE BEST MODEL (H =", best_H, ") ---\n")
+
+# Struttura i parametri stimati in un dataframe per una visualizzazione tabulare pulita.
+final_params <- data.frame(Component = 1:best_H, Weight_Pi = best_pi, Alpha = best_alpha, Beta = best_beta)
+
+# Mostra la tabella dei parametri arrotondando i valori a 3 cifre decimali.
+print(round(final_params, 3))
+
+# Genera listogramma principale ad alta risoluzione (breaks = 40) per i dati empirici.
+# col = tomato imposta il colore di riempimento, freq = FALSE scala lasse Y sulla densita.
+hist(my_data, breaks = 40, freq = FALSE,
+     col = "tomato", border = "white",
+     xlab = "Load factor (hourly / daily peak)",
+     main = paste("Optimal Beta Mixture Anatomy (H =", best_H, ")"))
+
+# Inizializza il vettore per accumulare il profilo della densita complessiva della mistura.
+total_density <- rep(0, 500)
+
+# Ciclo sulle componenti del modello per mappare lanatomia della mistura.
+for (c in 1:best_H) {
+  # Calcola la densita teorica della componente c-esima, riscalandola (moltiplicandola) 
+  # per il rispettivo peso di allocazione stocastica (best_pi).
+  comp_density <- best_pi[c] * dbeta(x_seq, best_alpha[c], best_beta[c])
+  
+  # Accumula la densita parziale nel vettore globale.
+  total_density <- total_density + comp_density
+  
+  # Se il modello e una mistura (H > 1), traccia graficamente le singole sub-densita.
+  if (best_H > 1) {
+    # lty = 2 imposta la linea tratteggiata (dashed), col = black usa il nero.
+    lines(x_seq, comp_density, col = "black", lty = 2, lwd = 2)
+  }
+}
+
+# Disegna la linea continua spessa (lwd = 4) che rappresenta la densita totale stimata.
+# col = midnightblue evidenzia il fit complessivo sovrapposto a dati e componenti discrete.
+lines(x_seq, total_density,
+```
+
+## MCMC Diagnostics: The Label Switching Problem
+
+Although the overall mixture density accurately captures the empirical
+data, directly averaging the parameters across all MCMC iterations (as
+done above) can be misleading. To understand why, we must inspect the
+MCMC trace plots.
+
+```{r}
+
+# Estrae i campioni stocastici grezzi relativi al modello ottimale selezionato.
+# Contiene i tensori delle catene per verificare la convergenza dellalgoritmo.
+raw_samples <- all_samples[[best_H]]
+
+# Converte gli oggetti mcarray in matrici bidimensionali con shape [Componente, Iterazioni_Totali].
+# Questa operazione unisce le catene senza alterare lordine temporale dei campionamenti.
+raw_pi_mat    <- matrix(raw_samples$pi_weights, nrow = best_H)
+raw_alpha_mat <- matrix(raw_samples$alpha, nrow = best_H)
+raw_beta_mat  <- matrix(raw_samples$beta, nrow = best_H)
+
+# Estrae i tensori tridimensionali originali preservando la separazione delle catene.
+# La struttura geometrica di questi array e [Componente, Iterazione, Catena].
+alpha_array <- raw_samples$alpha
+beta_array  <- raw_samples$beta
+pi_array    <- raw_samples$pi_weights
+
+# Ricava i metadati geometrici del campionamento accedendo alle dimensioni del tensore.
+# dim 2 corrisponde al numero di iterazioni per catena, dim 3 al numero di catene aperte.
+n_iter   <- dim(alpha_array)[2]
+n_chains <- dim(alpha_array)[3]
+
+# Definisce un vettore di interi da 1 a n_chains per mappare i colori delle linee.
+# Associa a ogni catena un colore standard della palette di R (1=nero, 2=rosso, ecc).
+chain_colors <- 1:n_chains
+
+# ---------------------------------------------------------------------
+# DIAGNOSTICA PER ALPHA
+# ---------------------------------------------------------------------
+# Imposta la griglia grafica a 2 righe e 2 colonne per ospitare 4 grafici per pagina.
+# Permette di affiancare Trace e Density di 2 componenti distinte per volta.
+par(mfrow = c(2, 2), mar = c(4, 4, 3, 1))
+
+# Ciclo iterativo sulle H componenti del modello per analizzare i parametri alpha.
+for (h in 1:best_H) {
+  # Calcola il minimo e il massimo assoluto considerando tutte le catene simultaneamente.
+  # Previene il troncamento verticale dei vettori stocastici durante il plotting.
+  y_lims <- range(alpha_array[h, , ])
+  
+  # 1. Genera il Trace plot per la prima catena (c = 1).
+  # type = l imposta il grafico a linee continue per mostrare il percorso del sampler.
+  plot(1:n_iter, alpha_array[h, , 1], type = "l", col = chain_colors[1],
+       ylim = y_lims, xlab = "Iterations", ylab = "",
+       main = paste0("Trace of alpha[", h, "]"))
+  
+  # Sovrappone i percorsi delle catene successive alla prima utilizzando la funzione lines.
+  if (n_chains > 1) {
+    for (c in 2:n_chains) {
+      lines(1:n_iter, alpha_array[h, , c], col = chain_colors[c])
+    }
+  }
+  
+  # 2. Generazione del Density plot tramite la stima kernel della densita (funzione density).
+  # Lanalisi viene eseguita sulla matrice aggregata che collassa tutte le catene.
+  plot(density(raw_alpha_mat[h, ]),
+       main = paste0("Density of alpha[", h, "]"),
+       xlab = "", ylab = "Density")
+}
+
+# ---------------------------------------------------------------------
+# DIAGNOSTICA PER BETA
+# ---------------------------------------------------------------------
+# Il layout 2x2 rimane attivo ereditando la configurazione precedente.
+# Ciclo iterativo sulle H componenti del modello per analizzare i parametri beta.
+for (h in 1:best_H) {
+  # Determina il range globale di oscillazione per i parametri beta della componente h.
+  y_lims <- range(beta_array[h, , ])
+  
+  # 1. Genera il Trace plot per la prima catena del parametro beta corrente.
+  plot(1:n_iter, beta_array[h, , 1], type = "l", col = chain_colors[1],
+       ylim = y_lims, xlab = "Iterations", ylab = "",
+       main = paste0("Trace of beta[", h, "]"))
+  
+  # Sovrappone le linee delle catene rimanenti per verificare visivamente il mixing.
+  if (n_chains > 1) {
+    for (c in 2:n_chains) {
+      lines(1:n_iter, beta_array[h, , c], col = chain_colors[c])
+    }
+  }
+  
+  # 2. Traccia la stima della densita a posteriori per il parametro beta empirico.
+  plot(density(raw_beta_mat[h, ]),
+       main = paste0("Density of beta[", h, "]"),
+       xlab = "", ylab = "Density")
+}
+
+# ---------------------------------------------------------------------
+# DIAGNOSTICA PER PI (WEIGHTS)
+# ---------------------------------------------------------------------
+# Ciclo iterativo sulle H componenti del modello per analizzare i pesi della mistura.
+for (h in 1:best_H) {
+  # Isola il range empirico dei pesi stimati per ottimizzare lo zoom del grafico.
+  y_lims <- range(pi_array[h, , ])
+  
+  # 1. Genera il Trace plot relativo alla frazione di allocazione della componente h.
+  plot(1:n_iter, pi_array[h, , 1], type = "l", col = chain_colors[1],
+       ylim = y_lims, xlab = "Iterations", ylab = "",
+       main = paste0("Trace of pi[", h, "]"))
+  
+  # Sovrappone le traiettorie stocastiche delle altre catene per il controllo del comportamento.
+  if (n_chains > 1) {
+    for (c in 2:n_chains) {
+      lines(1:n_iter, pi_array[h, , c], col = chain_colors[c])
+    }
+  }
+  
+  # 2. Genera il Density plot marginale per verificare la forma della posterior dei pesi.
+  plot(density(raw_pi_mat[h, ]),
+       main = paste0("Density of pi[", h, "]"),
+       xlab = "", ylab = "Density")
+}
+
+# Ripristina linquadramento geometrico standard della finestra grafica.
+# Disattiva la griglia multi-plot impostando un singolo grafico a pieno schermo.
+par(mfrow = c(1, 1))
+```
+
+```{r}
+# Definisce una funzione per calcolare l-indice R-hat (Gelman-Rubin Diagnostic) per tutti i parametri.
+# Riceve i tre tensori tridimensionali di campionamento, il numero di componenti ottimale e il numero di catene.
+calculate_rhat_table <- function(alpha_array, beta_array, pi_array, best_H, n_chains) {
+  
+  # Inizializza vettori numerici vuoti di lunghezza pari a best_H per allocare i risultati.
+  rhat_alpha <- numeric(best_H)
+  rhat_beta  <- numeric(best_H)
+  rhat_pi    <- numeric(best_H)
+  
+  # Ciclo iterativo sulle H componenti del modello.
+  for (h in 1:best_H) {
+    
+    # --- Diagnostica di Gelman-Rubin per i parametri Alpha ---
+    # Crea una lista vuota per accogliere le catene convertite in formato compatibile con il pacchetto coda.
+    chain_list_alpha <- list()
+    for (c in 1:n_chains) {
+      # mcmc() converte il vettore numerico della singola catena in un oggetto stocastico di tipo mcmc.
+      chain_list_alpha[[c]] <- mcmc(alpha_array[h, , c])
+    }
+    # as.mcmc.list unisce le singole catene in una struttura MCMC multicatena.
+    # gelman.diag calcola il fattore di riduzione della varianza potenziale (PSRF).
+    # autoburnin = FALSE disattiva il taglio automatico iniziale, poiche il burn-in e gia stato eseguito.
+    gr_alpha <- gelman.diag(as.mcmc.list(chain_list_alpha), autoburnin = FALSE)
+    # Estraggo il Point Estimate (valore stimato puntuale dell-R-hat) dalla matrice psrf (riga 1, colonna 1).
+    rhat_alpha[h] <- gr_alpha$psrf[1, 1] 
+    
+    # --- Diagnostica di Gelman-Rubin per i parametri Beta ---
+    # Ripete la medesima logica di astrazione e conversione per il tensore dei parametri beta.
+    chain_list_beta <- list()
+    for (c in 1:n_chains) {
+      chain_list_beta[[c]] <- mcmc(beta_array[h, , c])
+    }
+    gr_beta <- gelman.diag(as.mcmc.list(chain_list_beta), autoburnin = FALSE)
+    rhat_beta[h] <- gr_beta$psrf[1, 1] 
+    
+    # --- Diagnostica di Gelman-Rubin per i parametri Pi (Weights) ---
+    # Ripete la medesima logica di astrazione per il tensore dei pesi della mistura.
+    chain_list_pi <- list()
+    for (c in 1:n_chains) {
+      chain_list_pi[[c]] <- mcmc(pi_array[h, , c])
+    }
+    gr_pi <- gelman.diag(as.mcmc.list(chain_list_pi), autoburnin = FALSE)
+    rhat_pi[h] <- gr_pi$psrf[1, 1] 
+  }
+  
+  # 1. Generazione dinamica dei nomi delle etichette delle variabili.
+  # paste0 concatena la stringa fissa con la sequenza numerica da 1 a best_H.
+  alpha_names <- paste0("alpha[", 1:best_H, "]")
+  beta_names  <- paste0("beta[", 1:best_H, "]")
+  pi_names    <- paste0("pi[", 1:best_H, "]")
+  
+  # 2. Assemblaggio dei vettori paralle
+```
+
+\
+As clearly visible in the trace and density plots for the raw parameters
+($\alpha$, $\beta$, and $\pi$), the sampling chains exhibit severe
+instability, with lines running on separate parallel tracks and
+multi-modal posterior densities. To formally quantify this issue, we
+computed the Gelman-Rubin diagnostic ($\hat{R}$) on these raw
+parameters, which spiked well above the standard 1.10 threshold. At this
+stage, such behavior could indicate either a genuine failure of the MCMC
+chains to converge or a lack of identifiability known as **Label
+Switching**.
+
+```{r}
+# 1. Estrazione del tensore tridimensionale della log-likelihood dal modello ottimale.
+# Il tensore risultante ha come dimensioni geometriche: [N_osservazioni, Iterazioni, Catene].
+loglik_array <- raw_samples$log_lik
+
+# Memorizza il numero di iterazioni per catena e il numero di catene attive dai metadati dellarray.
+n_iter   <- dim(loglik_array)[2]
+n_chains <- dim(loglik_array)[3]
+
+# 2. Calcolo della Log-Likelihood congiunta (globale) del dataset per ogni iterazione MCMC.
+# Sotto l-ipotesi di indipendenza condizionale delle osservazioni, la verosimiglianza globale
+# e il prodotto delle verosimiglianze puntuali, quindi la log-verosimiglianza e la somma.
+# apply con MARGIN = c(2, 3) preserva gli assi di iterazioni e catene, comprimendo l-asse 1 (N)
+# tramite la funzione sum. Restituisce una matrice bidimensionale [Iterazioni, Catene].
+global_loglik <- apply(loglik_array, c(2, 3), sum)
+
+# 3. Conversione della matrice in una struttura adatta all-analisi diagnostica del pacchetto coda.
+# Inizializza una lista vuota per accogliere i vettori stocastici delle singole catene.
+loglik_chains <- list()
+for (c in 1:n_chains) {
+  # Estrae il vettore colonna corrispondente alla catena c e lo converte in oggetto mcmc.
+  loglik_chains[[c]] <- mcmc(global_loglik[, c])
+}
+# Coerce la lista di catene in un oggetto standardizzato di tipo mcmc.list.
+loglik_mcmc_list <- as.mcmc.list(loglik_chains)
+
+# 4. Estrazione delle metriche di convergenza e di efficienza campionaria.
+# gelman.diag calcola l-R-hat. Si accede alla matrice psrf per estrarre il Point Estimate [1, 1].
+# autoburnin = FALSE evita la rimozione della prima meta dei campioni, gia depurati a monte.
+rhat_loglik <- gelman.diag(loglik_mcmc_list, autoburnin = FALSE)$psrf[1, 1]
+
+# effectiveSize calcola l-Effective Sample Size (ESS), ovvero il numero di campioni indipendenti
+# corretti per l-autocorrelazione seriale interna alle catene MCMC.
+ess_loglik  <- effectiveSize(loglik_mcmc_list)
+
+# 5. Strutturazione dei risultati in un dataframe bidimensionale per il rendering nel report.
+# c() unisce i vettori delle label e delle metriche numeriche calcolate.
+# round() stabilizza i decimali (4 cifre per R-hat, 2 per l-ESS numerico).
+likelihood_diagnostic_table <- data.frame
+```
+
+To determine the true cause, we evaluated $\hat{R}$ and the Effective
+Sample Size (ESS) on the marginal log-likelihood. Because the overall
+log-likelihood is a global metric, it is inherently invariant to any
+permutation of the component labels. As shown in the convergence table,
+the log-likelihood achieves an $\hat{R}$ value very close to 1.00
+alongside a robust ESS. This proves that the model has successfully
+reached global convergence; the instability in the individual parameters
+is strictly an artifact of JAGS randomly swapping cluster labels across
+different chains. Taking a naive arithmetic average of these raw
+parameters would simply blend swapped labels together, creating
+mathematically distorted 'Frankenstein' distributions.
+
+To fix this and restore parameter identifiability, we order the mixture
+components at each MCMC step according to their theoretical expected
+value:
+
+$$\mathbb{E}[X_h] = \frac{\alpha_h}{\alpha_h + \beta_h}$$
+
+We dynamically align the parameters from left to right, compute the
+densities for these sorted components, and average the curves
+themselves. This guarantees that 'Component 1' is consistently the
+leftmost distribution across all samples and chains, completely
+neutralizing the label-switching effect, collapsing the R-hat values
+back to 1.00, and revealing the true anatomy of the latent subgroups.
+
+```{r}
+# Estrae l-oggetto contenente i campionamenti MCMC associati al modello selezionato.
+best_samples <- all_samples[[best_H]]
+
+# Converte i campionamenti MCMC in matrici bidimensionali con shape [Componente, Campioni_MCMC_Totali].
+# Srotola i tensori fondendo iterazioni e catene sulla dimensione delle colonne.
+pi_mat    <- matrix(best_samples$pi_weights, nrow = best_H)
+alpha_mat <- matrix(best_samples$alpha, nrow = best_H)
+beta_mat  <- matrix(best_samples$beta, nrow = best_H)
+
+# Estrae il numero totale di simulazioni stocastiche salvate (S_totale = iterazioni * catene).
+S_totale <- ncol(pi_mat)
+
+# Genera la griglia continua di 500 punti per il calcolo e il disegno delle curve.
+x_seq <- seq(0.001, 0.999, length.out = 500)
+
+# Inizializza un array tridimensionale vuoto per immagazzinare le curve di densita.
+# La geometria geometrica e: [Indice_Componente, Singolo_Sample_MCMC, Punto_Asse_X].
+component_curves <- array(0, dim = c(best_H, S_totale, length(x_seq)))
+
+# Stampa a console l-avanzamento dell-algoritmo di ordinamento.
+cat("Sorting MCMC chains and calculating posterior densities...\n")
+
+# Ciclo for principale che itera su ogni singolo sample MCMC estratto dal sampler.
+for (s in 1:S_totale) {
+  
+  # 1. Calcolo del valore atteso (media teorica) di ciascuna delle H componenti Beta al sample s.
+  # Sfrutta il calcolo analitico del primo momento della distribuzione Beta: alpha / (alpha + beta).
+  # Restituisce un vettore di lunghezza pari a best_H.
+  beta_means <- alpha_mat[, s] / (alpha_mat[, s] + beta_mat[, s])
+  
+  # 2. Ordinamento delle componenti basato sulla magnitudo delle medie teoriche appena calcolate.
+  # order() restituisce
+```
+
+single distr visualization:\
+
+```{r}
+# ---- Componenti Beta separati, con i loro valori --------------------------
+# Estrae i campioni stocastici a posteriori associati al modello ottimale (best_H).
+best_samples <- all_samples[[best_H]]
+
+# Converte gli mcarray nativi di JAGS in matrici bidimensionali con shape [H, S_tot].
+# Questo srotolamento unisce le catene preservando la dimensionalita delle componenti.
+pi_mat    <- matrix(best_samples$pi_weights, nrow = best_H)
+alpha_mat <- matrix(best_samples$alpha,      nrow = best_H)
+beta_mat  <- matrix(best_samples$beta,       nrow = best_H)
+S_tot      <- ncol(pi_mat)
+
+# Inizializza matrici vuote parallele per salvare i parametri dopo il riordino.
+# Servono a memorizzare i valori ordinati per ogni singolo draw stocastico s.
+pi_ord    <- matrix(0, best_H, S_tot)
+alpha_ord <- matrix(0, best_H, S_tot)
+beta_ord  <- matrix(0, best_H, S_tot)
+
+# Ciclo for per eseguire il relabeling (ordinamento ex-post) di ogni singolo draw s.
+for (s in 1:S_tot) {
+  # Calcola le medie teoriche delle componenti al sample s e ricava l-ordine crescente.
+  # Formula del valore atteso della Beta: alpha / (alpha + beta).
+  ord <- order(alpha_mat[, s] / (alpha_mat[, s] + beta_mat[, s]))
+  
+  # Riordina i vettori dei parametri al sample s usando le posizioni definite in ord.
+  # Risolve il problema del label-switching per il calcolo degli intervalli di credibilita.
+  pi_ord[, s]    <- pi_mat[ord, s]
+  alpha_ord[, s] <- alpha_mat[ord, s]
+  beta_ord[, s]  <- beta_mat[ord, s]
+}
+
+# Definizione di una closure (funzione interna) per calcolare le statistiche di sintesi.
+# Calcola la media lungo le righe (rowMeans) e i quantili 0.025 e 0.975 (IC al 95 percento).
+summ <- function(m) cbind(mean = rowMeans(m),
+                          lwr  = apply(m, 1, quantile, 0.025),
+                          upr  = apply(m, 1, quantile, 0.975))
+
+# Applica la funzione summ alle matrici dei parametri ordinati.
+# Genera matrici contenenti stima puntuale e limiti dell-intervallo per Alpha, Beta e Pi.
+A <- summ(alpha_ord); B <- summ(beta_ord); P <- summ(pi_ord)
+
+# Calcola il vettore delle medie a posteriori delle componenti usando le medie di Alpha e Beta.
+comp_mean <- A[, "mean"] / (A[, "mean"] + B[, "mean"])
+
+# Costruisce il dataframe riassuntivo per l-esportazione tabellare dei risultati.
+# Unisce le medie e formatta gli intervalli di credibilita (IC) come stringhe di testo.
+tab <- data.frame(
+  Componente = 1:best_H,
+  Peso_pi    = round(P[, "mean"], 3),
+  Alpha      = round(A[, "mean"], 3),
+  Beta       = round(B[, "mean"], 3),
+  Media      = round(comp_mean, 3),
+  Alpha_IC   = paste0("[", round(A[, "lwr"], 2), ", ", round(A[, "upr"], 2), "]"),
+  Beta_IC    = paste0("[", round(B[, "lwr"], 2), ", ", round(B[, "upr"], 2), "]")
+)
+
+# Stampa a console l-intestazione del report dei parametri.
+cat("--- Parametri dei componenti (medie a posteriori, IC 95%) ---\n")
+
+# Mostra la tabella finale nascondendo gli indici di riga predefiniti di R.
+print(tab, row.names = FALSE)
+
+# ---- Un pannello per ogni componente --------------------------------------
+# Genera la griglia continua di 500 punti tra 0.001 e 0.999 per valutare le funzioni.
+x_seq <- seq(0.001, 0.999, length.out = 500)
+
+# Vettore statico di colori per caratterizzare graficamente i singoli pannelli.
+cols  <- c("black", "darkgreen", "purple", "darkorange", "brown")
+
+# 1) Calcola le curve di densita teoriche per ciascuna delle H componenti.
+# sapply applica dbeta su ogni componente usando le medie di Alpha e Beta stimate.
+# Restituisce una matrice bidimensionale con shape [500 punti, H componenti].
+dens_mat <- sapply(1:best_H, function(h) dbeta(x_seq, A[h, "mean"], B[h, "mean"]))
+
+# 2) Definizione dei limiti fissi (ancoraggi) per gli assi X e Y.
+# Forzare una scala comune (uniforme) permette il confronto visivo diretto tra i pannelli.
+ylim_common <- c(0, 10)
+xlim_common <- c(0, 1)
+
+# 3) Configurazione del layout multi-pannello ed esecuzione del ciclo di plotting.
+# ceiling(best_H / 2) calcola il numero di righe necessarie arrotondando per eccesso.
+# Alloca una griglia a due colonne. mar definisce la spaziatura dei margini.
+par(mfrow = c(ceiling(best_H / 2), 2), mar = c(4, 4, 3, 1))
+
+# Ciclo for per plottare individualmente ogni componente h della mistura.
+for (h in 1:best_H) {
+  # Disegna la curva di densita memorizzata nella colonna h di dens_mat.
+  # Applica i limiti fissi xlim_common e ylim_common per uniformare la scala grafica.
+  plot(x_seq, dens_mat[, h], type = "l", lwd = 3, col = cols[h],
+       xlim = xlim_common, ylim = ylim_common,
+       xlab = "Load factor", ylab = "Densita",
+       main = paste("Componente", h))
+  
+  # Aggiunge una legenda testuale nell-angolo in alto a sinistra senza box di contorno.
+  # sprintf formatta dinamicamente i valori numerici impostando i decimali desiderati.
+  legend("topleft", bty = "n", cex = 0.9, text.col = cols[h],
+         legend = c(sprintf("peso  = %.3f", P[h, "mean"]),
+                    sprintf("alpha = %.2f", A[h, "mean"]),
+                    sprintf("beta  = %.2f", B[h, "mean"]),
+                    sprintf("media = %.3f", comp_mean[h])))
+}
+
+# Ripristina l-ambiente grafico di R disattivando la griglia multi-pannello.
+# Riporta lo slot di disegno alla configurazione standard a schermo intero (1x1).
+par(mfrow = c(1, 1))
+
+```
+
+# Task 2
+
+Objective: overlay the **posterior predictive density** on the empirical
+histogram and verify that the modes (the peaks of the data) are
+recovered by the model selected in Task 1.
+
+## Posterior predictive density
+
+The fully Bayesian overlay is the **posterior predictive density**,
+obtained by averaging the mixture density over the *entire* posterior
+(the latent $z$ is already integrated out inside each mixture term):
+$$p(\tilde x \mid \text{data})
+= \frac{1}{S}\sum_{s=1}^S \sum_{h=1}^H
+  \pi_h^{(s)}\,\text{Beta}\!\left(\tilde x \mid \alpha_h^{(s)}, \beta_h^{(s)}\right).$$
+
+We average the **densities**, not the parameters. This way the curve
+accounts for posterior uncertainty. A useful side effect: because each
+draw contributes its *whole* mixture (the inner sum over $h$),
+relabelling the components of any given draw leaves that sum unchanged —
+the result is automatically **invariant to label switching**, with no
+need for any reordering trick.
+
+```{r}
+# Estrae i campioni stocastici a posteriori associati al modello ottimale (best_H).
+best_samples <- all_samples[[best_H]]
+
+# Genera una griglia fine di 600 punti tra 0.001 e 0.999.
+# Rappresenta l-asse X continuo su cui valutare la funzione di densita predittiva.
+x_grid <- seq(0.001, 0.999, length.out = 600)
+
+# Struttura di controllo condizionale per calcolare la PPD a seconda del numero di componenti.
+if (best_H == 1) {
+  
+  # Per H=1, i parametri estratti da JAGS sono vettori monodimensionali.
+  # as.vector garantisce la conversione forzata a vettori standard di R.
+  alpha_s <- as.vector(best_samples$alpha)
+  beta_s  <- as.vector(best_samples$beta)
+  
+  # Il numero totale di campioni stocastici coincide con la lunghezza del vettore.
+  S_tot   <- length(alpha_s)
+  
+  # Calcolo della PPD per il modello a componente singola:
+  # 1. seq_len(S_tot) crea la sequenza da 1 a S_tot su cui sapply esegue l-iterazione.
+  # 2. La funzione anonima calcola la densita Beta (dbeta) sulla griglia x_grid per ogni draw s.
+  # 3. sapply restituisce una matrice con shape [600 punti, S_tot campioni].
+  # 4. rowMeans calcola la media lungo le righe (sulle iterazioni), integrando analiticamente 
+  #    l-incertezza dei parametri (ovvero calcola l-integrale della Posterior Predictive).
+  ppd     <- rowMeans(sapply(seq_len(S_tot),
+                             function(s) dbeta(x_grid, alpha_s[s], beta_s[s])))
+} else {
+  
+  # Per H>1, i parametri estratti da JAGS sono matrici o tensori.
+  # matrix converte e mappa i parametri in matrici bidimensionali con shape [best_H, S_tot].
+  pi_mat    <- matrix(best_samples$pi_weights, nrow = best_H)
+  alpha_mat <- matrix(best_samples$alpha,      nrow = best_H)
+  beta_mat  <- matrix(best_samples$beta,       nrow = best_H)
+  
+  # Estrae il numero totale di simulazioni stocastiche salvate (colonne delle matrici).
+  S_tot      <- ncol(pi_mat)
+
+  # Definizione di una closure (funzione interna) per calcolare la densita della mistura.
+  # Input: s (l-indice del singolo draw MCMC corrente).
+  # Output: un vettore di 600 punti contenente la densita pesata della mistura completa.
+  mix_density <- function(s) {
+    # Inizializza un vettore numerico di zeri lungo quanto la griglia x_grid.
+    d <- numeric(length(x_grid))
+    
+    # Ciclo for interno che itera sulle H componenti latenti della mistura.
+    for (h in 1:best_H)
+      # Applica la legge delle probabilita totali al draw s: accumula linearmente 
+      # le densita delle sub-componenti pesate per il rispettivo peso di allocazione pi_mat.
+      d <- d + pi_mat[h, s] * dbeta(x_grid, alpha_mat[h, s], beta_mat[h, s])
+    
+    # Restituisce il vettore della curva complessiva per il singolo draw s.
+    d
+  }
+  
+  # Calcolo finale della Posterior Predictive Distribution (PPD) per il modello di mistura:
+  # 1. sapply applica la funzione mix_density su tutti gli S_tot campioni stocastici.
+  # 2. Genera una matrice intermedia con shape [600 punti, S_tot colonne].
+  # 3. rowMeans comprime la matrice calcolando la media aritmetica orizzontale per ogni punto.
+  #    Questo processo esegue l-integrazione monte carlo rispetto alla distribuzione posterior.
+  ppd <- rowMeans(sapply(seq_len(S_tot), mix_density))
+}
+```
+
+## Overlay and mode recovery
+
+```{r}
+# Definizione di una funzione per estrarre i massimi locali (modi) da una curva discreta.
+# Input: xx (vettore delle coordinate X, es. x_grid), yy (vettore delle ordinate Y, es. ppd).
+local_maxima <- function(xx, yy) {
+  # Calcola la lunghezza del vettore delle ordinate.
+  n   <- length(yy)
+  
+  # Trova gli indici in cui il punto corrente supera sia il vicino sinistro che il vicino destro.
+  # yy[2:(n - 1)] isola i punti interni escludendo i bordi.
+  # yy[1:(n - 2)] rappresenta i rispettivi elementi precedenti (vicini sinistri).
+  # yy[3:n] rappresenta i rispettivi elementi successivi (vicini destri).
+  # which() restituisce la posizione logica TRUE. Si aggiunge 1 per compensare lo shift dell-indice
+  # causato dal partizionamento che iniziava dal secondo elemento.
+  hit <- which(yy[2:(n - 1)] > yy[1:(n - 2)] & yy[2:(n - 1)] > yy[3:n]) + 1
+  
+  # Restituisce i valori della griglia X corrispondenti agli indici dei massimi locali trovati.
+  xx[hit]
+}
+
+# Invocazione della funzione local_maxima sulla curva della Posterior Predictive Distribution (ppd).
+# Identifica i punti di picco (modi predittivi) del modello di mistura ottimale.
+ppd_modes <- local_maxima(x_grid, ppd)
+
+# Stampa a console le coordinate X dei modi predittivi identificati, arrotondate a 3 decimali.
+cat("Posterior-predictive modes: ", round(ppd_modes, 3), "\n")
+
+# Genera l-istogramma empirico dei dati osservati da usare come sfondo.
+# freq = FALSE scala l-asse Y sulla densita di probabilita anziche sul conteggio delle frequenze.
+hist(my_data, breaks = 40, freq = FALSE,
+     col = "lightgray", border = "white",
+     xlab = "Load factor (hourly / daily peak)",
+     main = paste("Task 2 — Posterior predictive overlay (H =", best_H, ")"))
+
+# Sovrappone l-andamento continuo della Posterior Predictive Distribution (PPD).
+# Questa curva spessa rappresenta il comportamento predittivo integrato del modello bayesiano.
+lines(x_grid, ppd, col = "midnightblue", lwd = 3)
+
+# Disegna linee verticali tratteggiate in corrispondenza dei modi identificati.
+# v = ppd_modes specifica le coordinate X di ancoraggio, col = tomato imposta il colore rosso.
+abline(v = ppd_modes, col = "tomato", lty = 2, lwd = 1.5)
+
+# Evidenzia con un punto pieno il vertice di ciascun picco sulla curva.
+# approx() esegue un-interpolazione lineare per calcolare l-esatta ordinata Y sulla curva ppd
+# in corrispondenza dei valori X estratti in ppd_modes. pch = 19 imposta il pallino pieno.
+points(ppd_modes, approx(x_grid, ppd, ppd_modes)$y, pch = 19, col = "tomato")
+
+# Aggiunge la legenda descrittiva nell-angolo superiore destro del grafico.
+# Associa coerentemente i simboli (pch), i tipi di linea (lty) e i colori definiti nel plot.
+# bty = n rimuove il rettangolo di contorno per mantenere l-estetica pulita.
+legend("topright", bty = "n", cex = 0.9,
+       legend = c("Posterior predictive", "Predictive modes"),
+       col = c("midnightblue", "tomato"),
+       lty = c(1, 2), lwd = c(3, 1.5), pch = c(NA, 19))
+```
+
+**Reading.** The posterior predictive curve (blue) is the Bayesian
+predictive density for a new observation given the data. The red dashed
+lines mark its local maxima: if they align with the visible peaks of the
+histogram the model has successfully recovered the modes of the data.
+With `best_H > 1` the mixture reproduces a multi-modal profile that a
+single Beta cannot.
+
+# Task 3
+
+Objective (**post-hoc exploration**): assign each observation to its
+maximum-a-posteriori (MAP) component, then plot the empirical fraction
+of observations in each component as a function of `hour`.
+
+In a mixture the latent indicator $z_i$ is the cluster label, so this
+step means assigning every observation to its most likely component and
+studying how those assignments vary across hours of the day.
+
+**Avoiding label switching.** We do not use the raw $z_i$ from a single
+MCMC draw (labels permute across iterations). Instead we compute
+**posterior responsibilities** using the components **re-ordered by
+their mean** at every draw (the same ordering used in the anatomy plot):
+$$r_{ih} = \frac{1}{S}\sum_{s=1}^S \frac{\pi^{(s)}_{(h)}\,\text{Beta}(x_i\mid\alpha^{(s)}_{(h)},\beta^{(s)}_{(h)})}{\sum_k \pi^{(s)}_{(k)}\,\text{Beta}(x_i\mid\alpha^{(s)}_{(k)},\beta^{(s)}_{(k)})},
+\qquad \hat z_i = \arg\max_h r_{ih},$$ where $(h)$ denotes the $h$-th
+component from the left (smallest mean). This makes "Component 1"
+consistently the lowest-mean component and the MAP assignment stable
+across chains.
+
+```{r}
+# Estrae i campioni stocastici a posteriori associati al modello ottimale (best_H).
+best_samples <- all_samples[[best_H]]
+
+# Converte gli mcarray nativi di JAGS in matrici bidimensionali con shape [H, S_tot].
+# Questo srotolamento fonde le iterazioni e le catene lungo la dimensione delle colonne.
+pi_mat    <- matrix(best_samples$pi_weights, nrow = best_H)
+alpha_mat <- matrix(best_samples$alpha,      nrow = best_H)
+beta_mat  <- matrix(best_samples$beta,       nrow = best_H)
+S_tot      <- ncol(pi_mat)
+
+# Inizializza la matrice delle medie delle responsibilities con shape [N_osservazioni, H_componenti].
+# L-elemento resp[i, h] memorizzera la probabilita a posteriori che l-osservazione i appartenga alla componente h.
+resp <- matrix(0, nrow = N, ncol = best_H)
+
+# Ciclo for principale che itera su ogni singolo sample MCMC estratto dal sampler.
+for (s in 1:S_tot) {
+  
+  # Calcola le medie teoriche delle componenti al sample s e ricava l-ordine crescente.
+  # Questo step risolve il problema del label-switching, garantendo che la componente h sia coerente tra i draw.
+  ord <- order(alpha_mat[, s] / (alpha_mat[, s] + beta_mat[, s]))
+
+  # Inizializza una matrice temporanea per calcolare i pesi non normalizzati dell-assegnazione al draw s.
+  w <- matrix(0, nrow = N, ncol = best_H)
+  
+  # Ciclo interno per valutare la densita di ogni componente riordinata.
+  for (h in 1:best_H) {
+    # Isola l-indice nativo JAGS (idx) che corrisponde alla h-esima componente partendo da sinistra.
+    idx <- ord[h]
+    
+    # Calcola il numeratore della regola di Bayes per l-osservazione i: pi_h * Beta(x_i | alpha_h, beta_h).
+    # dbeta agisce sull-intero vettore my_data, calcolando la verosimiglianza per tutte le N osservazioni in un colpo solo.
+    w[, h] <- pi_mat[idx, s] * dbeta(my_data, alpha_mat[idx, s], beta_mat[idx, s])
+  }
+  
+  # Normalizzazione element-wise per riga applicando il teorema di Bayes.
+  # Dividendo ogni riga per la sua somma (rowSums), trasformiamo i pesi assoluti in probabilita condizionate.
+  # w[, h] diventa ora la probabilita che l-osservazione i appartenga alla componente h, dato il draw s.
+  w <- w / rowSums(w)          
+  
+  # Accumula le probabilita condizionate calcolate in questo draw nella matrice globale resp.
+  resp <- resp + w
+}
+
+# Calcola la media aritmetica dividendo per il numero totale di campioni MCMC.
+# Questo step implementa l-integrazione Monte Carlo per marginalizzare l-incertezza dei parametri.
+resp <- resp / S_tot
+
+# Assegnazione MAP (Maximum A Posteriori): associa ogni osservazione alla componente piu probabile.
+# apply con MARGIN = 1 itera per riga (osservazione) e find l-indice della colonna che massimizza la probabilita.
+z_map <- apply(resp, 1, which.max)
+
+# Stampa a console l-intestazione del report sul clustering.
+cat("Cluster sizes (MAP assignment):\n")
+
+# Calcola la tabella delle frequenze assolute per ogni cluster.
+# factor(..., levels = 1:best_H) garantisce che vengano mostrati anche i cluster eventualmente vuoti (frequenza zero).
+print(table(factor(z_map, levels = 1:best_H)))
+```
+
+Empirical fraction of observations in each component as a function of
+the hour of the day.
+
+```{r}
+# Estrae la variabile temporale relativa alle ore dal dataframe lf_fit.
+# Poiche lf_fit e stato filtrato a monte con lo stesso indice idx, il vettore hours
+# risulta perfettamente allineato e coerente con my_data e con le assegnazioni z_map.
+hours <- lf_fit$hour   
+
+# Costruisce una tabella di contingenza (frequenze d-incrocio) tra le ore del giorno e i cluster.
+# factor(..., levels = 0:23) assicura la presenza di tutte le 24 ore, anche in caso di zero osservazioni.
+# factor(..., levels = 1:best_H) garantisce la mappatura di tutte le componenti ottimali della mistura.
+tab      <- table(factor(hours, levels = 0:23), factor(z_map, levels = 1:best_H))
+
+# Converte le frequenze assolute della tabella in proporzioni relative (frazioni).
+# margin = 1 indica che la normalizzazione avviene per riga: la somma delle quote di ciascuna ora sara pari a 1.
+# Permette di vedere come si distribuisce percentualmente la composizione dei cluster ora per ora.
+frac_mat <- prop.table(tab, margin = 1)
+
+# Definisce il vettore statico dei colori per mantenere la coerenza cromatica con i grafici precedenti.
+cols <- c("black", "darkgreen", "purple", "darkorange", "brown")
+
+# Grafica simultaneamente tutte le colonne della matrice in funzione delle ore del giorno (0:23).
+# type = b disegna sia punti che linee di giunzione, pch = 19 imposta i cerchi pieni come marker.
+# lty = 1 forza l-uso di linee continue per tutte le curve, col applica la palette dedicata.
+# lwd = 2 incrementa lo spessore delle linee per migliorarne la visibilita.
+matplot(0:23, as.matrix(frac_mat), type = "b", pch = 19, lty = 1,
+        col = cols[1:best_H], lwd = 2,
+        xlab = "Hour of day",
+        ylab = "Fraction of observations in component",
+        main = "Cluster composition by hour (MAP assignment on z)")
+
+# Aggiunge la legenda identificativa nell-angolo superiore sinistro del grafico.
+# Concatena dinamicamente il testo, associa i marker pieni (pch = 19) e rimuove il box di bordo (bty = n).
+legend("topleft", legend = paste("Component", 1:best_H),
+       col = cols[1:best_H], lwd = 2, pch = 19, bty = "n")
+```
+
+A complementary view: raw observations coloured by their MAP component,
+plotted against hour. Jitter is added on the x-axis so overlapping
+points are visible.
+
+```{r}
+# Definisce il vettore statico dei colori per mantenere la coerenza cromatica con i grafici precedenti.
+cols <- c("black", "darkgreen", "purple", "darkorange", "brown")
+
+# Genera lo scatter plot principale che incrocia le ore del giorno con il load factor.
+# jitter(hours, amount = 0.3) aggiunge un rumore casuale uniforme alle ore (ampiezza massima 0.3).
+# Questo trucco grafico risolve l-overplotting, ovvero evita che i punti si sovrappongano 
+# verticalmente sulle tacche intere delle ore, mostrando la densita reale dei dati.
+# col indicizza il vettore cols tramite il vettore di allocazione z_map.
+# adjustcolor(..., alpha.f = 0.45) applica una trasparenza del 45 percento ai punti, 
+# permettendo di percepire l-accumulo e l-addensamento dei dati nelle zone piu popolate.
+# pch = 19 imposta il marker a cerchio pieno, cex = 0.7 rimpicciolisce la dimensione del punto.
+# xaxt = n sopprime l-asse X nativo per permettere una formattazione e una spaziatura custom.
+plot(jitter(hours, amount = 0.3), my_data,
+     col  = adjustcolor(cols[z_map], alpha.f = 0.45),
+     pch  = 19, cex = 0.7,
+     xlab = "Hour of day", ylab = "Load factor",
+     main = "Load factor by hour — coloured by MAP component",
+     xaxt = "n")
+
+# Disegna l-asse X personalizzato posizionando i tick e le etichette orarie a intervalli di 2 ore.
+# seq(0, 23, by = 2) genera la sequenza numerica (0, 2, 4, ..., 22).
+axis(1, at = seq(0, 23, by = 2))
+
+# Aggiunge la legenda identificativa nell-angolo superiore sinistro del grafico.
+# Concatena dinamicamente il testo per mappare le H componenti stimate nel modello di mistura.
+# col applica i colori coerenti, pch = 19 mostra i pallini pieni e bty = n elimina il bordo.
+legend("topleft", legend = paste("Component", 1:best_H),
+       col = cols[1:best_H], pch = 19, bty = "n", cex = 0.9)
+```
+
+**Reading.** Each mixture component captures a distinct "shape" of the
+load factor: low-mean components dominate off-peak hours (night), while
+the high-mean component dominates around the daily peak. The scatter
+plot shows the raw assignments point by point, while the fraction plot
+above shows the same information aggregated by hour. Together they
+confirm the link between load shape and time slot. Task 4 will model
+this relationship explicitly with a multinomial logistic regression on
+Fourier-transformed `hour`, to be compared against the fraction plot.
+
+# Task 4
+
+Objective (**advanced**): fit a second model that performs
+*classification on `hour`*, using the component assignment from Task 3
+as the **response variable**, and plot the predicted probability of each
+component as a function of `hour`. We then compare these predicted
+curves with the empirical fractions of Task 3 and discuss the result.
+
+## From clustering to a supervised model on `hour`
+
+In Task 3 the latent label $\hat z_i \in \{1, \dots, H\}$ was obtained
+*unsupervised*, from the load factor alone. Here we turn the question
+around and ask: **how predictable is the component label from the time
+of day?** We treat $\hat z_i$ as the response of a supervised model
+whose only covariate is `hour`.
+
+Because the response has $H > 2$ levels, this is a **multinomial
+(multi-class) logistic regression**, the natural generalisation of the
+binomial logit to more than two categories. We keep one component as the
+**reference category** (here $h = 1$, the lowest-mean component) and
+model the log-odds of every other component against it.
+
+`hour` is a **cyclic** variable: hour $23$ is adjacent to hour $0$.
+Encoding it as a raw integer would wrongly treat midnight and 11pm as
+far apart, so we expand it on a **Fourier basis** of period $24$,
+$$s_{ik} = \sin\!\left(\frac{2\pi k\,\mathrm{hour}_i}{24}\right), \qquad
+c_{ik} = \cos\!\left(\frac{2\pi k\,\mathrm{hour}_i}{24}\right),
+\qquad k = 1, \dots, K,$$ and use these $2K$ functions as covariates. A
+small number of harmonics $K$ is enough; we pick $K$ by WAIC, exactly as
+we chose $H$ in Task 1.
+
+## Mathematical formulation
+
+For observation $i$ and component $h$ the linear predictor is
+$$\eta_{i,h} = \beta_{0,h} + \sum_{k=1}^{K}\bigl(\alpha_{k,h}\,s_{ik}
+            + \gamma_{k,h}\,c_{ik}\bigr),$$ with the reference class
+constrained to zero, $\beta_{0,1} = 0$ and
+$\alpha_{k,1} = \gamma_{k,1} = 0$ for all $k$. The class probabilities
+are recovered with the **softmax** transform
+$$P(z_i = h) = \frac{\exp(\eta_{i,h})}{\sum_{j=1}^{H}\exp(\eta_{i,j})},$$
+which automatically satisfies $\sum_h P(z_i = h) = 1$. By construction
+the predicted probabilities are **periodic** in `hour` with period $24$,
+exactly like the empirical curves of Task 3.
+
+We place vague $\mathcal{N}(0, 0.01)$ priors (in JAGS precision
+parametrisation, i.e. variance $100$) on the $H - 1$ free coefficient
+blocks, the same weakly informative choice used for the regression and
+mixture models in the lab.
+
+**On label switching.** The response $\hat z_i$ comes from the
+components **already re-ordered by increasing mean** in Task 3, so
+"component 1" is consistently the lowest-mean cluster. The labels are
+therefore stable and the comparison between predicted curves and
+empirical fractions is well defined.
+
+## Design matrices and JAGS model
+
+We pre-compute the sine/cosine matrices $S$ and $C$ in R and pass them
+to JAGS as data; the response is `z_map` from Task 3 and the covariate
+is `hours` (aligned with `my_data`). The JAGS code is the
+categorical-logit skeleton: `z[i] ~ dcat(pp[i, 1:H])` with `pp[i, ]`
+built from the softmax of the Fourier linear predictors. We also monitor
+the marginal per-observation log-likelihood
+`log_lik[i] = log(pp[i, z[i]])` so the same WAIC machinery from Task 1
+can select $K$.
+
+```{r}
+jags_model_logit <- "
+model {
+  # Ciclo sulle n osservazioni del dataset
+  for (i in 1:n) {
+    
+    # Processo stocastico di allocazione: z[i] e la variabile latente categoriale
+    # dcat assegna losservazione i a una delle H componenti sulla base del vettore 
+    # di probabilita pp[i, 1:H], che varia per ogni osservazione in base alle covariate.
+    z[i] ~ dcat(pp[i, 1:H])
+    
+    # Ciclo sulle H componenti per calcolare i predittori lineari e le probabilita logit
+    for (h in 1:H) {
+      
+      # Calcolo del predittore lineare (eta) per losservazione i e la componente h.
+      # beta0[h] e lintercetta specifica della componente.
+      # inprod esegue il prodotto scalare tra il vettore dei coefficienti e le covariate:
+      # 1. inprod(alpha, S) moltiplica i coefficienti delle spline sinusoidali (S)
+      # 2. inprod(gamma, C) moltiplica i coefficienti delle spline cosinusoidali (C)
+      eta[i, h]    <- beta0[h] +
+                      inprod(alpha[1:K, h], S[i, 1:K]) +
+                      inprod(gamma[1:K, h], C[i, 1:K])
+      
+      # Trasformazione esponenziale del predittore lineare per il numeratore del logit
+      expEta[i, h] <- exp(eta[i, h])
+      
+      # Funzione Softmax (o logit multinomiale): normalizza gli esponenziali dividendo
+      # per la somma di expEta di tutte le H componenti. Garantisce che la somma di pp[i, ] sia 1.
+      pp[i, h]     <- expEta[i, h] / sum(expEta[i, 1:H])
+    }
+    
+    # Calcolo della Log-Likelihood puntuale per il calcolo di WAIC o LOO.
+    # Corrisponde al logaritmo della probabilita stimata per la componente z[i] effettivamente estratta.
+    log_lik[i] <- log(pp[i, z[i]])
+  }
+
+  # ---- DEFINIZIONE DELLA CLASSE DI RIFERIMENTO (REFERENCE CLASS h = 1) ----
+  # Per identificare il modello logit multinomiale ed evitare la multicollinearita,
+  # i parametri della prima componente (h = 1) vengono forzati e vincolati a zero.
+  beta0[1] <- 0
+  for (k in 1:K) { alpha[k, 1] <- 0; gamma[k, 1] <- 0 }
+
+  # ---- PRIOR SULLE RIMANENTI H-1 COMPONENTI STIMATE ----
+  # Si applicano prior gaussiane vaghe (non informative) sui blocchi di coefficienti rimanenti.
+  # dnorm in JAGS usa la parametrizzazione tramite precisione (1 diviso varianza).
+  # Una precisione di 0.01 corrisponde a una varianza di 100 ovvero deviazione standard 10.
+  for (h in 2:H) {
+    # Prior per lintercetta
+    beta0[h] ~ dnorm(0, 0.01)
+    
+    # Prior per i coefficienti associati alle K armoniche di seni e coseni
+    for (k in 1:K) {
+      alpha[k, h] ~ dnorm(0, 0.01)
+      gamma[k, h] ~ dnorm(0, 0.01)
+    }
+  }
+}
+"
+```
+
+Helper that builds the Fourier design for a given number of harmonics
+$K$, fits the model and returns the monitored samples. We keep the same
+sampler settings used throughout the project (2 chains, 1000 burn-in,
+2000 iterations); a final run would simply raise these.
+
+```{r}
+# Definisce una funzione di alto livello per automatizzare il fit del modello logit multinomiale.
+# Input: K, ovvero il numero di frequenze armoniche (frequenze di Fourier) da includere nel modello.
+fit_logit_K <- function(K) {
+  
+  # Generazione della matrice di design per le componenti sinusoidali (S_mat).
+  # 1. sapply itera da 1 a K e calcola il seno per ogni armonica: sin(2 * pi * k * tempo / periodo).
+  # 2. Il periodo e fissato a 24 ore per catturare la ciclicita circadiana del load factor.
+  # 3. matrix(..., nrow = N) forza la struttura ad essere bidimensionale con shape [N, K].
+  #    Garantisce la compatibilita con JAGS anche quando K = 1 (evita il collasso a vettore).
+  S_mat <- matrix(sapply(1:K, function(k) sin(2 * pi * k * hours / 24)), nrow = N)
+  
+  # Generazione della matrice di design speculare per le componenti cosinusoidali (C_mat).
+  # Cattura gli sfasamenti temporali (phase shifts) delle onde orarie combinandosi con S_mat.
+  C_mat <- matrix(sapply(1:K, function(k) cos(2 * pi * k * hours / 24)), nrow = N)
+
+  # Struttura la lista dei dati da passare al compilatore di JAGS.
+  # Mappa le assegnazioni rigide dei cluster (z_map), le costanti geometriche (N, best_H, K)
+  # e le due matrici di design trigonometriche appena calcolate.
+  dat <- list(z = z_map, n = N, H = best_H, K = K, S = S_mat, C = C_mat)
+  
+  # Compilazione del modello gerarchico bayesiano multinomiale (jags_model_logit).
+  # textConnection interpreta la stringa del modello come un canale di input testuale.
+  # inits stabilisce i seed deterministici per le catene tramite la funzione make_inits.
+  m <- jags.model(textConnection(jags_model_logit), data = dat,
+                  inits = make_inits(2), n.chains = 2, quiet = TRUE)
+  
+  # Fase di Burn-in (o riscaldamento).
+  # Esegue 1000 iterazioni MCMC per stabilizzare le catene ed eliminare l-effetto dei valori iniziali.
+  # Questi campioni vengono scartati automaticamente e non concorrono alla posterior.
+  update(m, n.iter = 1000)
+  
+  # Campionamento stocastico effettivo e salvataggio dei parametri monitorati.
+  # Estrae 2000 iterazioni per catena per l-intercetta beta0, i coefficienti alpha e gamma,
+  # e la matrice log_lik puntuale, utile per valutare la complessita ottimale di K tramite WAIC.
+  jags.samples(m, variable.names = c("beta0", "alpha", "gamma", "log_lik"),
+               n.iter = 2000)
+}
+```
+
+## Model selection over the number of harmonics
+
+We fit $K \in \{1, \dots, 5\}$ and compare them with WAIC, with the same
+machinery used in Task 1. A wider grid lets us *see* the elbow rather
+than assume it: a larger $K$ buys a wigglier probability profile, and we
+expect WAIC to stop improving once the harmonics start fitting noise. As
+in Task 1 we report `WAIC` with its `SE` and `p_eff`, and `loo_compare`
+with `elpd_diff`/`se_diff`, then pick the simplest $K$ that is not
+clearly beaten.
+
+```{r}
+# Definisce la griglia di iperparametri da testare (da 1 a 5 frequenze armoniche).
+K_grid     <- 1:5
+
+# Alloca vettori vuoti di tipo lista per memorizzare i risultati dei modelli.
+# Pre-allocare la memoria della dimensione corretta velocizza il ciclo in R.
+logit_fits <- vector("list", length(K_grid)) # Conterra i campionamenti grezzi JAGS
+waic_klist <- vector("list", length(K_grid)) # Conterra gli oggetti WAIC di loo
+
+# Inizio del ciclo per scansionare la griglia degli iperparametri.
+# seq_along(K_grid) genera in modo sicuro la sequenza di indici posizionali (1, 2, 3, 4, 5).
+for (j in seq_along(K_grid)) {
+  # Estrae il valore effettivo di K per l-iterazione corrente.
+  K <- K_grid[j]
+  
+  # Traccia l-avanzamento stampando a console il modello in fase di elaborazione.
+  cat("Fitting multinomial logit with K =", K, "harmonic(s)...\n")
+  
+  # Esegue il fit bayesiano chiamando la funzione fit_logit_K definita in precedenza.
+  logit_fits[[j]] <- fit_logit_K(K)
+  
+  # Calcola l-oggetto WAIC completo estraendo la matrice log_lik dal fit e salvandolo nella lista.
+  waic_klist[[j]] <- waic_from_loglik(logit_fits[[j]]$log_lik)
+}
+
+# Assegna i nomi agli elementi della lista (es. K=1, K=2, ...) per popolare 
+# in automatico le labels della tabella di confronto e del grafico successivo.
+names(waic_klist) <- paste0("K=", K_grid)
+
+# Estrae il vettore continuo non arrotondato dei valori puntuali del WAIC per ogni K.
+waic_logit    <- sapply(waic_klist, function(w) w$estimates["waic", "Estimate"])
+
+# Estrae in modo parallelo il vettore degli Standard Error (SE) associati alle stime dei WAIC.
+waic_logit_se <- sapply(waic_klist, function(w) w$estimates["waic", "SE"])
+
+# Genera la tabella comparativa finale concatenando verticalmente i dataframe di output.
+# Map applica ic_row a ciascun elemento combinando gli oggetti WAIC con i rispettivi nomi.
+# do.call con rbind effettua la fusione verticale delle righe in un unico dataframe.
+logit_table <- do.call(rbind, Map(ic_row, waic_klist, names(waic_klist)))
+
+# Stampa a console l-intestazione del report di Model Selection per il Task 4.
+cat("\n--- TASK 4 MODEL SELECTION: WAIC with standard errors ---\n")
+
+# Mostra la tabella comparativa formattata nascondendo gli indici di riga predefiniti di R.
+print(logit_table, row.names = FALSE)
+
+# Esegue il contrasto a coppie sulla scala predittiva ordinando i modelli dal migliore al peggiore.
+# Mostra la discrepanza attesa della densita predittiva (elpd_diff) e il rispettivo SE della differenza.
+cat("\n--- loo_compare (differences vs the best model) ---\n")
+print(loo_compare(waic_klist))
+
+# Identifica il numero ottimale di armoniche K andando a cercare il punto di minimo globale nel vettore.
+best_K <- K_grid[which.min(waic_logit)]
+
+# Stampa a console il verdetto numerico definitivo del numero di armoniche ottimali.
+cat("\n>>> Lowest-WAIC number of harmonics: K =", best_K, "<<<\n")
+
+# Nota di interpretazione statistica: se modelli con K piu basso si trovano entro 1 o 2 Standard Error
+# dalla prima riga di loo_compare, l-incremento di complessita non e giustificato (principio di parsimonia).
+cat("    (K within ~1-2 se_diff of the top row are tied; prefer the smallest.)\n")
+```
+
+The WAIC-vs-$K$ curve with $\pm 1$ SE bars, to read the elbow directly:
+
+```{r}
+# Calcola i limiti dell-asse Y includendo l-incertezza dello Standard Error per le armoniche.
+# range() trova il minimo e il massimo assoluto combinando i vettori delle barre:
+# 1. waic_logit - waic_logit_se (estremo inferiore)
+# 2. waic_logit + waic_logit_se (estremo superiore)
+ylim_k <- range(c(waic_logit - waic_logit_se, waic_logit + waic_logit_se))
+
+# Genera lo scatter plot principale con le linee di giunzione tra i diversi valori di K.
+# type = b disegna sia punti che linee, pch = 19 imposta i cerchi pieni come marker.
+# cex = 1.4 stabilisce la dimensione dei punti, col imposta la tinta steelblue.
+# ylim applica i limiti calcolati per contenere interamente le barre verticali.
+# xaxt = n disattiva l-asse X nativo per permettere una formattazione precisa.
+plot(K_grid, waic_logit, type = "b", pch = 19, cex = 1.4,
+     col = "steelblue", lwd = 2, ylim = ylim_k,
+     xlab = "Number of harmonics (K)", ylab = "WAIC (lower is better)",
+     main = "Task 4 — WAIC by number of harmonics (bars = +/-1 SE)",
+     xaxt = "n")
+
+# Disegna l-asse X posizionando i tick esattamente in corrispondenza dei valori interi in K_grid.
+axis(1, at = K_grid)
+
+# Aggiunge le barre di errore di ampiezza pari a +/- 1 Standard Error (SE).
+# Le coordinate definiscono i segmenti verticali per ogni iperparametro K.
+# angle = 90 rende piatte le estremita delle frecce, mimando il look standard dei grafici di errore.
+# code = 3 forza il disegno del baffo orizzontale su entrambi i lati del segmento.
+# length = 0.05 controlla l-ampiezza orizzontale della testa piatta della freccia.
+arrows(K_grid, waic_logit - waic_logit_se, K_grid, waic_logit + waic_logit_se,
+       angle = 90, code = 3, length = 0.05, col = "steelblue")
+
+# Evidenzia graficamente il modello logit che ha minimizzato il criterio WAIC (best_K).
+# points() sovrappone un cerchio vuoto (pch = 1) di grandi dimensioni (cex = 3).
+# col = tomato applica il colore rosso e lwd = 3 ne incrementa lo spessore del contorno.
+points(best_K, waic_logit[which.min(waic_logit)],
+       col = "tomato", pch = 1, cex = 3, lwd = 3)
+
+# Inserisce la legenda testuale nell-angolo in alto a destra del grafico.
+# paste() concatena dinamicamente il testo con l-indice ottimale salvato in best_K.
+# text.col applica il colore rosso direttamente ai caratteri, bty = n elimina il box esterno.
+legend("topright", legend = paste("Lowest WAIC: K =", best_K),
+       text.col = "tomato", bty = "n")
+```
+
+## Predicted probability curves
+
+To draw the curves we evaluate the posterior mean of $P(z = h)$ on a
+grid of `hour` values from $0$ to $23$. For each posterior draw we
+recompute the Fourier columns of the grid, form the linear predictors
+from the sampled coefficients, apply the softmax, and finally average
+the resulting probabilities over all draws (averaging *probabilities*,
+not coefficients, so the curves carry the posterior uncertainty).
+
+```{r}
+# Estrae il modello logit multinomiale ottimale indicizzando la lista logit_fits.
+# which(K_grid == best_K) individua la posizione del modello con il K che minimizza il WAIC.
+best_fit <- logit_fits[[which(K_grid == best_K)]]
+
+# Riformatta i coefficienti estratti da JAGS per unificare le dimensioni delle catene e delle iterazioni.
+# beta0_s passa da [H, iter, chains] a una matrice bidimensionale [H, S_tot_l].
+beta0_s <- matrix(best_fit$beta0, nrow = best_H)
+
+# Salva il numero totale di campioni stocastici accumulati (S_tot_l = iterazioni * catene).
+S_tot_l <- ncol(beta0_s)
+
+# Converte i tensori quadridimensionali di alpha e gamma [K, H, iter, chains] in array tridimensionali.
+# La nuova geometria [best_K, best_H, S_tot_l] fonde le ultime due dimensioni stocastiche.
+alpha_s <- array(best_fit$alpha, dim = c(best_K, best_H, S_tot_l))
+gamma_s <- array(best_fit$gamma, dim = c(best_K, best_H, S_tot_l))
+
+# Definizione della griglia oraria completa (dalle 0 alle 23) per predire il profilo continuo delle probabilita.
+hour_grid <- 0:23
+
+# Generazione delle matrici di design di Fourier sulla griglia oraria fissa di 24 punti.
+# Sg valuta i seni per le best_K armoniche ottimali, Cg valuta i rispettivi coseni.
+# matrix(..., nrow = length(hour_grid)) garantisce che le strutture siano matrici [24, best_K].
+Sg <- matrix(sapply(1:best_K, function(k) sin(2 * pi * k * hour_grid / 24)),
+             nrow = length(hour_grid))
+Cg <- matrix(sapply(1:best_K, function(k) cos(2 * pi * k * hour_grid / 24)),
+             nrow = length(hour_grid))
+
+# Inizializza la matrice delle probabilita predittive medie con shape [24 ore, H componenti].
+P_pred <- matrix(0, nrow = length(hour_grid), ncol = best_H)
+
+# Ciclo for principale sulle S_tot_l simulazioni stocastiche per calcolare la PPD delle probabilita.
+for (s in 1:S_tot_l) {
+  # Inizializza la matrice dei predittori lineari temporanei per il sample s attuale.
+  eta <- matrix(0, nrow = length(hour_grid), ncol = best_H)
+  
+  # Ciclo interno sulle H componenti latenti della mistura.
+  for (h in 1:best_H) {
+    # Calcola il predittore lineare combinando lintercetta e i prodotti matriciali.
+    # %*% esegue il prodotto matrice-vettore tra la matrice delle spline [24, K] e il vettore dei pesi [K].
+    eta[, h] <- beta0_s[h, s] + Sg %*% alpha_s[, h, s] + Cg %*% gamma_s[, h, s]
+  }
+  
+  # Applica la trasformazione Softmax (logit multinomiale) al draw s attuale.
+  # ex calcola lesponenziale di ogni elemento della matrice eta.
+  ex     <- exp(eta)
+  # Dividendo per la somma riga per riga (rowSums), si ottengono le probabilita condizionate.
+  # Accumula le probabilita calcolate nella matrice globale P_pred.
+  P_pred <- P_pred + ex / rowSums(ex)
+}
+
+# Divide per il numero totale di campioni MCMC per completare l-integrazione Monte Carlo.
+# Ottiene la stima puntuale della probabilita a posteriori di appartenenza ai cluster in funzione del tempo.
+P_pred <- P_pred / S_tot_l
+
+# Definisce il vettore statico dei colori per preservare la coerenza cromatica del report.
+cols <- c("black", "darkgreen", "purple", "darkorange", "brown")
+
+# Traccia le curve continue orarie per ciascuna delle H componenti.
+# type = l forza il disegno a linee continue, ylim fissa lasse Y tra 0 e 1 (essendo probabilita).
+matplot(hour_grid, P_pred, type = "l", lty = 1, lwd = 2.5,
+        col = cols[1:best_H], ylim = c(0, 1),
+        xlab = "Hour of day", ylab = "Predicted P(component | hour)",
+        main = paste0("Task 4 — Multinomial logit (K = ", best_K, ")"))
+
+# Inserisce la legenda esplicativa nell-angolo superiore destro della figura.
+# lty = 1 mostra un segmento continuo per ogni colore, bty = n rimuove il rettangolo di contorno.
+legend("topright", legend = paste("Component", 1:best_H),
+       col = cols[1:best_H], lwd = 2.5, lty = 1, bty = "n")
+```
+
+## Comparison with the empirical fractions of Task 3
+
+Finally we overlay the smooth predicted curves (solid) on the empirical
+fractions from Task 3 (points, `frac_mat`). If the two agree, the
+component label is essentially a deterministic function of the hour, and
+the logit has simply learned a clean periodic version of the noisy
+empirical proportions.
+
+```{r}
+# Disegna il grafico di base piazzando i punti delle frazioni empiriche calcolate nel Task 3.
+# 0:23 definisce l-asse X orario. as.matrix(frac_mat) converte le proporzioni per il plotting.
+# type = p forza esclusivamente il disegno di punti discreti (senza linee di giunzione).
+# pch = 19 imposta i cerchi pieni, col associa i colori coerenti a ciascuna componente.
+# ylim = c(0, 1) fissa l-asse Y sul range logico delle probabilita e delle frazioni.
+matplot(0:23, as.matrix(frac_mat), type = "p", pch = 19,
+        col = cols[1:best_H], ylim = c(0, 1),
+        xlab = "Hour of day", ylab = "Fraction / predicted probability",
+        main = "Task 4 vs Task 3 — predicted curves vs empirical fractions")
+
+# Sovrappone al grafico corrente le curve continue delle probabilita predette dal modello logit (Task 4).
+# hour_grid e la sequenza 0:23, P_pred e la matrice delle probabilita Softmax integrate via MCMC.
+# lty = 1 imposta linee continue, lwd = 2.5 rende le curve spesse per staccarle visivamente dai punti.
+matlines(hour_grid, P_pred, lty = 1, lwd = 2.5, col = cols[1:best_H])
+
+# Inserisce la legenda combinata nell-angolo superiore destro per spiegare la doppia codifica grafica.
+# legend concatena le etichette delle H componenti alle labels dei due task da confrontare.
+# col associa i colori delle componenti e usa un grigio neutro (gray40) per le labels dei task.
+# pch, lty e lwd usano vettori paralleli con valori NA per escludere i simboli non pertinenti:
+# 1. Per le componenti: mostra il pallino pieno (19) e nasconde le linee (NA).
+# 2. Per il Task 3 (Empirical): mostra il pallino pieno (19) e nasconde la linea (NA).
+# 3. Per il Task 4 (Logit): nasconde il pallino (NA) e mostra la linea continua (1) con spessore 2.5.
+# bty = n elimina la scatola di bordo, cex = 0.85 scala il testo per non sovrapporlo ai dati.
+legend("topright",
+       legend = c(paste("Component", 1:best_H), "Empirical (Task 3)", "Logit (Task 4)"),
+       col = c(cols[1:best_H], "gray40", "gray40"),
+       pch = c(rep(19, best_H), 19, NA),
+       lty = c(rep(NA, best_H), NA, 1),
+       lwd = c(rep(NA, best_H), NA, 2.5),
+       bty = "n", cex = 0.85)
+```
+
+**Discussion — do the two plots match?** The solid logit curves track
+the empirical points closely: the low-mean component dominates at night,
+its probability falling as the day progresses, while the high-mean
+(near-peak) component rises to dominate around the daily peak hours,
+with the intermediate component(s) filling the transition. The agreement
+is expected, because both objects estimate the same quantity
+$P(\text{component}\mid\text{hour})$ — Task 3 by raw counting hour by
+hour, Task 4 by a smooth periodic model. The differences are
+informative: the empirical fractions are **noisy** (each hour aggregates
+only a handful of subsampled observations, so single hours can jump
+around), whereas the logit **borrows strength across neighbouring
+hours** through the Fourier basis and returns a smooth, strictly
+periodic profile. Where the two disagree it is almost always at hours
+with few observations, i.e. where the empirical estimate is least
+reliable. The number of harmonics $K$ selected by WAIC controls how much
+of the fine-grained hourly variation the curves are allowed to follow:
+too small a $K$ would oversmooth genuine structure, too large a $K$
+would chase sampling noise. Overall, the close match confirms that the
+latent load shapes uncovered by the mixture are strongly and smoothly
+tied to the time of day.

@@ -1,0 +1,1748 @@
+---
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+
+```{r}
+library(rjags)
+library(loo)
+library(coda)
+```
+
+**Data.** Data file: `data/hourly_load_factor.csv` (2000 rows). The CSV
+we share is a derived, pre-cleaned version. For each (day, hour) of the
+year we have computed the hourly mean of the **city-wide** active power
+$\overline{P}(d, h) = \mathrm{Zone1}(d, h) + \mathrm{Zone2}(d, h)
++ \mathrm{Zone3}(d, h)$ from the original 10-min readings, and then the
+**hourly load factor**
+$$\mathrm{LF}(d, h) = \frac{\overline{P}(d, h)}{\max_{h'} \overline{P}(d, h')}\,,$$
+i.e. the ratio between the average load in hour $h$ and the highest
+hourly average of the same day. By construction $\mathrm{LF}(d, h)
+\in [0, 1]$: the day-peak hour gets exactly $1$ and the deepest off-peak
+hour gets the smallest value. From the full $365 \times 24 \approx 8700$
+(day, hour) cells we have taken a uniform random subsample of 2000 rows
+and clamped the values to $(10^{-3},\, 1 - 10^{-3})$ so that the Beta
+log-density is finite at the boundary.
+
+Variables:
+
+`date` : calendar date (M/D/YYYY).
+
+`hour` : hour of the day, integer in $\{0, \dots, 23\}$.
+
+`load_factor` : hourly load factor as defined above, in
+$(10^{-3},\, 1 - 10^{-3})$.
+
+**Task.**
+
+1.  Compare a single Beta vs Beta mixture model with
+    $H = 1, 2, 3, 4, 5$, with model selection via WAIC.
+
+2.  Overlay the posterior predictive density on the empirical histogram
+    and verify that the modes are recovered.
+
+3.  **Post-hoc exploration.** Assign each observation to its
+    maximum-a-posteriori component, then plot the empirical fraction of
+    observations in each component as a function of `hour`.
+
+4.  **Advanced.** Fit a second model which does classification on `hour`
+    using the component assignment as response variable, and plot the
+    predicted probability of each component as a function of `hour`. Do
+    the two plots match? Discuss the results. (Details for this step are
+    presented in the additional details notebook) We will predict the
+    component assignment using a multinomial logistic regression with
+    the Fourier-transformed `hour` as covariate, i.e. with predictors
+    $\sin(k 2\pi h / 24)$ and $\cos(k 2\pi h / 24)$ to capture the
+    periodicity of the day.
+
+```{r}
+rm(list=ls())
+lf = read.csv("data/hourly_load_factor.csv")
+dim(lf); head(lf); summary(lf$load_factor)
+
+hist(lf$load_factor, breaks = 35, freq = FALSE,
+     col = "tomato", border = "white",
+     xlab = "Load factor (hourly / daily peak)",
+     main = "Hourly city load factor — empirical density (n = 2000)")
+lines(density(lf$load_factor, from = 0.01, to = 0.99),
+      col = "darkorange", lwd = 2)
+```
+
+# Task 1
+
+Objective: Compare a single Beta vs Beta mixture model with
+$H = 1, 2, 3, 4, 5$, with model selection via WAIC
+
+## Mathematical Formulation: Beta Mixture Model (BMM)
+
+A **Beta Mixture Model** with $H$ components expresses the probability
+density function (PDF) of a continuous random variable $X$ (where
+$X \in (0,1)$) as a convex combination of $H$ distinct Beta
+distributions.
+
+The overall density function is defined as:
+
+$$f(x; \boldsymbol{\pi}, \boldsymbol{\alpha}, \boldsymbol{\beta}) = \sum_{h=1}^H \pi_h \cdot \text{Beta}(x; \alpha_h, \beta_h)$$
+
+### Constraints and Parameters
+
+-   **Mixture Weights (**$\pi_h$): Represent the probability of a data
+    point belonging to component $h$. They must satisfy the following
+    conditions:
+    $$\sum_{h=1}^H \pi_h = 1 \quad \text{and} \quad \pi_h \ge 0 \quad \forall h \in \{1, \dots, H\}$$
+-   **Shape Parameters (**$\alpha_h, \beta_h$): Govern the geometry of
+    each individual Beta density within the mixture. They must be
+    strictly positive:
+    $$\alpha_h > 0, \quad \beta_h > 0 \quad \forall h \in \{1, \dots, H\}$$
+
+### Component Density Function
+
+Each individual component $h$ is a standard Beta distribution with the
+following PDF:
+
+$$\text{Beta}(x; \alpha_h, \beta_h) = \frac{1}{\text{B}(\alpha_h, \beta_h)} x^{\alpha_h - 1} (1 - x)^{\beta_h - 1}$$
+
+Where $\text{B}(\alpha_h, \beta_h)$ is the **Beta Function**, which acts
+as a normalizing constant and is defined using the Gamma function
+($\Gamma$):
+
+$$\text{B}(\alpha_h, \beta_h) = \frac{\Gamma(\alpha_h)\Gamma(\beta_h)}{\Gamma(\alpha_h + \beta_h)} = \int_{0}^{1} t^{\alpha_h - 1}(1 - t)^{\beta_h - 1} dt$$
+
+## Model Selection via WAIC (Widely Applicable Information Criterion)
+
+To determine the optimal number of components $H \in \{1, \dots, 5\}$,
+we use **WAIC**, a fully Bayesian criterion that estimates the
+out-of-sample predictive accuracy. It is particularly suited for mixture
+models because it accounts for the entire posterior distribution rather
+than a single point estimate.
+
+WAIC is defined as:
+
+$$\text{WAIC} = -2 \cdot (\text{lppd} - p_{\text{WAIC}})$$
+
+Where: \* $\text{lppd}$ is the **log pointwise predictive density**,
+which measures how well the model fits the observed data. \*
+$p_{\text{WAIC}}$ is the **effective number of parameters**, acting as a
+penalty for model complexity to prevent overfitting.
+
+### 1. Log Pointwise Predictive Density (lppd)
+
+Given $n$ data points and $S$ posterior samples drawn from the MCMC
+chains, the $\text{lppd}$ is calculated by averaging the likelihood of
+each data point across all posterior samples, and then taking the log:
+
+$$\text{lppd} = \sum_{i=1}^n \ln \left( \frac{1}{S} \sum_{s=1}^S f(x_i; \boldsymbol{\theta}^s) \right)$$
+
+Where $f(x_i; \boldsymbol{\theta}^s)$ is the Beta Mixture density
+evaluated at data point $x_i$ using the parameters
+$\boldsymbol{\theta}^s = \{\boldsymbol{\pi}^s, \boldsymbol{\alpha}^s, \boldsymbol{\beta}^s\}$
+from the $s$-th posterior draw.
+
+### 2. Effective Number of Parameters ($p_{\text{WAIC}}$)
+
+The penalty term computes the posterior variance of the log-likelihood
+for each data point individually, summing them up. This captures how
+sensitive the model is to the posterior uncertainty:
+
+$$p_{\text{WAIC}} = \sum_{i=1}^n \mathcal{V}_{s=1}^S \Big( \ln f(x_i; \boldsymbol{\theta}^s) \Big)$$
+
+Where $\mathcal{V}_{s=1}^S$ denotes the sample variance over the $S$
+posterior simulations:
+
+$$\mathcal{V}_{s=1}^S \Big( \ln f(x_i; \boldsymbol{\theta}^s) \Big) = \frac{1}{S-1} \sum_{s=1}^S \left( \ln f(x_i; \boldsymbol{\theta}^s) - \frac{1}{S}\sum_{j=1}^S \ln f(x_i; \boldsymbol{\theta}^j) \right)^2$$
+
+## JAGS Model
+
+### The Bayesian Formulation with Latent Variables (JAGS Approach)
+
+In practice, we do not know which component generated which data point.
+To solve this in a Bayesian framework using JAGS, we introduce a
+**latent discrete variable** $z_i$ for each observation $x_i$.
+
+The variable $z_i \in \{1, \dots, H\}$ acts as a classification label or
+"indicator", telling us which sub-population the $i$-th data point
+belongs to.
+
+#### Hierarchical Model Structure
+
+We define the model hierarchically as follows:
+
+1.  **Latent Assignment (**$z_i$):
+    $$z_i \sim \text{Categorical}(\boldsymbol{\pi})$$ This means each
+    data point is randomly assigned to a component based on the
+    probabilities defined by the mixture weights
+    $\boldsymbol{\pi} = [\pi_1, \dots, \pi_H]$.
+
+2.  **Conditional Likelihood (**$x_i \mid z_i$):
+    $$x_i \mid z_i \sim \text{Beta}(\alpha_{z_i}, \beta_{z_i})$$ Once
+    the component $z_i$ is assigned, the actual data point $x_i$ is
+    sampled from that specific Beta distribution.
+
+#### Prior Distributions
+
+To complete the Bayesian setup, we must specify prior distributions for
+all unknown parameters:
+
+-   **For the weights (**$\boldsymbol{\pi}$): We use a symmetric
+    **Dirichlet distribution**, which is the natural conjugate prior for
+    categorical probabilities that must sum to 1:
+    $$\boldsymbol{\pi} \sim \text{Dirichlet}(\mathbf{1}_H)$$ Where
+    $\mathbf{1}_H = [1, 1, \dots, 1]$ of length $H$. This represents a
+    flat, uninformative uniform prior over the probability simplex.
+
+-   **For the shape parameters (**$\alpha_h, \beta_h$): Since these
+    parameters must be strictly positive, we assign an **Exponential
+    distribution** with a small rate parameter $\lambda$:
+    $$\alpha_h \sim \text{Exponential}(\lambda), \quad \beta_h \sim \text{Exponential}(\lambda) \quad \forall h \in \{1, \dots, H\}$$
+    Setting $\lambda = 0.1$ ensures the prior is highly diffuse (weak),
+    allowing the data to fully drive the posterior estimation.
+
+## CODE
+
+We import the data. For the final run we use all 2000 observations; for
+quick tests, set `use_subsample <- TRUE` to keep the runtime short. We
+fix the seed for reproducibility and keep `hour` aligned with `my_data`
+because it will be used for clustering.
+
+```{r}
+set.seed(123)
+
+# Setup independent RNG seeds for parallel MCMC chains
+make_inits <- function(n_chains, seed0 = 123) {
+  lapply(seq_len(n_chains), function(c)
+    list(.RNG.name = "base::Mersenne-Twister", .RNG.seed = seed0 + c))
+}
+
+use_subsample <- TRUE
+n_sub <- 400
+
+# Subsampling for computational efficiency
+if (use_subsample) {
+  idx <- sample(seq_len(nrow(lf)), n_sub)
+} else {
+  idx <- seq_len(nrow(lf))
+}
+lf_fit <- lf[idx, ]
+
+my_data <- pmax(lf_fit$load_factor)
+N <- length(my_data)
+```
+
+We then define the JAGS models. Because JAGS is sensitive to model
+dimensioning, we use one specification for $H = 1$ and a parametric
+version for the remaining cases.
+
+The following code specifies the likelihood and priors so that JAGS can
+run MCMC simulations and estimate the posterior distribution.
+
+-   The likelihood is a Beta mixture model.\
+    We introduce a latent categorical indicator $Z_i$ to assign each
+    observation $X_i$ to one of the $H$ components.
+
+-   We assign weakly informative priors to all unknown parameters. In
+    particular, we place a symmetric Dirichlet prior on the mixture
+    weights $\boldsymbol{\pi}$ so that they sum to 1.
+
+-   For the shape parameters $\alpha_h$ and $\beta_h$, we use
+    Exponential priors with a small rate parameter ($\lambda = 0.1$).
+    This keeps the parameters strictly positive while leaving the prior
+    diffuse and weakly informative.
+
+```{r}
+# Model with H=1
+jags_model_H1 <- "
+model {
+  for (i in 1:N) {
+    x[i] ~ dbeta(alpha, beta)
+    log_lik[i] <- logdensity.beta(x[i], alpha, beta)
+  }
+  alpha ~ dexp(0.1)
+  beta  ~ dexp(0.1)
+}"
+
+# Model for H > 1 (Beta Mixture Model with Latent Variable Z)
+jags_model_mix <- "
+model {
+  for (i in 1:N) {
+    z[i] ~ dcat(pi_weights[1:H])
+    x[i] ~ dbeta(alpha[z[i]], beta[z[i]])
+    for (h in 1:H) {
+      lcomp[i, h] <- log(pi_weights[h]) + logdensity.beta(x[i], alpha[h], beta[h])
+    }
+    mx[i] <- max(lcomp[i, 1:H])
+    for (h in 1:H) {
+      e[i, h] <- exp(lcomp[i, h] - mx[i])
+    }
+    log_lik[i] <- mx[i] + log(sum(e[i, 1:H]))
+  }
+  
+  pi_weights[1:H] ~ ddirch(ones[1:H])
+
+  for (h in 1:H) {
+    alpha[h] ~ dexp(0.1)
+    beta[h]  ~ dexp(0.1)
+  }
+}"
+```
+
+**Key point.** For a mixture model, WAIC must be computed from the
+**marginal** likelihood of each observation, integrating out the latent
+$z$:
+$$\log p(x_i \mid \theta^{(s)}) = \log \sum_{h=1}^H \pi_h^{(s)}\,\text{Beta}(x_i \mid \alpha_h^{(s)}, \beta_h^{(s)}).$$
+Using instead the log-density conditional on the sampled $z_i$
+($\log\text{Beta}(x_i\mid\alpha_{z_i},\beta_{z_i})$) answers a different
+predictive question, inflates $p_{\text{WAIC}}$, and tends to favour too
+many components. We compute `log_lik[i]` **inside JAGS** with the
+numerically stable log-sum-exp trick and monitor it; the helper here
+only reshapes the samples into the $[S \times N]$ form expected by
+`loo::waic`. As a further advantage, the marginal density is invariant
+to label permutations, so this WAIC is immune to label switching.
+
+```{r}
+# Reshape MCMC log-likelihood array (chains x iterations x data_points) to matrix (samples x data_points)
+loglik_to_matrix <- function(loglik_samples) {
+  ll <- aperm(loglik_samples, c(2, 3, 1))
+  S  <- dim(ll)[1] * dim(ll)[2]
+  n  <- dim(ll)[3]
+  matrix(ll, nrow = S, ncol = n)
+}
+
+waic_from_loglik <- function(loglik_samples) waic(loglik_to_matrix(loglik_samples))
+
+compute_waic_from_loglik <- function(loglik_samples)
+  waic_from_loglik(loglik_samples)$estimates["waic", "Estimate"]
+
+# Format WAIC estimates and standard errors into a summary row
+ic_row <- function(w, nm) {
+  e <- w$estimates
+  data.frame(Model = nm,
+             ELPD  = round(e["elpd_waic", "Estimate"], 1),
+             p_eff = round(e["p_waic",    "Estimate"], 1),
+             WAIC  = round(e["waic",      "Estimate"], 1),
+             SE    = round(e["waic",      "SE"],       1))
+}
+
+# Model selection using the 1-SE rule to favor parsimony within uncertainty bounds
+select_parsimonious <- function(waic_values, waic_se, complexity, n_se = 1) {
+  best      <- which.min(waic_values)
+  threshold <- waic_values[best] + n_se * waic_se[best]
+  tied      <- which(waic_values <= threshold)
+  tied[which.min(complexity[tied])]
+}
+```
+
+Now it is time to fit the models.
+
+We use the following hyperparameters for the reasons below:
+
+-   **n chains** = 2\
+    This choice helps reduce the risk that the Markov chains become
+    trapped near a local mode, which could lead to biased estimates.
+    Using two JAGS chains with different initial values increases the
+    chance of obtaining a more reliable exploration of the posterior
+    distribution. In a final analysis, we would ideally use 3 or 4
+    chains.
+
+-   **Burn-in** = 1000\
+    This is a standard burn-in period, used to allow the chains to move
+    away from their initial values before samples are retained for
+    inference.
+
+-   **Iterations** = 2000
+
+$H = 1$
+
+```{r}
+cat("Fitting Model H = 1...\n")
+
+jags_data_H1 <- list(x = my_data, N = N)
+model_H1 <- jags.model(textConnection(jags_model_H1), data = jags_data_H1, inits = make_inits(2), n.chains = 2, quiet = TRUE)
+
+# Burn-in phase
+update(model_H1, n.iter = 1000)
+
+# Posterior sampling
+samples_H1 <- jags.samples(model_H1, variable.names = c("alpha", "beta", "log_lik"), n.iter = 2000)
+
+waic_H1 <- compute_waic_from_loglik(samples_H1$log_lik)
+cat("WAIC for H = 1:", waic_H1, "\n")
+```
+
+$H = 2$
+
+```{r}
+cat("Fitting Model H = 2...\n")
+
+jags_data_H2 <- list(x = my_data, N = N, H = 2, ones = rep(1, 2))
+model_H2 <- jags.model(textConnection(jags_model_mix), data = jags_data_H2, inits = make_inits(2), n.chains = 2, quiet = TRUE)
+
+update(model_H2, n.iter = 1000)
+samples_H2 <- jags.samples(model_H2, variable.names = c("pi_weights", "alpha", "beta", "log_lik"), n.iter = 2000)
+
+waic_H2 <- compute_waic_from_loglik(samples_H2$log_lik)
+cat("WAIC for H = 2:", waic_H2, "\n")
+```
+
+$H = 3$
+
+```{r}
+cat("Fitting Model H = 3...\n")
+
+jags_data_H3 <- list(x = my_data, N = N, H = 3, ones = rep(1, 3))
+model_H3 <- jags.model(textConnection(jags_model_mix), data = jags_data_H3, inits = make_inits(2), n.chains = 2, quiet = TRUE)
+
+update(model_H3, n.iter = 1000)
+samples_H3 <- jags.samples(model_H3, variable.names = c("pi_weights", "alpha", "beta", "log_lik"), n.iter = 2000)
+
+waic_H3 <- compute_waic_from_loglik(samples_H3$log_lik)
+cat("WAIC for H = 3:", waic_H3, "\n")
+```
+
+$H = 4$
+
+```{r}
+cat("Fitting Model H = 4...\n")
+
+jags_data_H4 <- list(x = my_data, N = N, H = 4, ones = rep(1, 4))
+model_H4 <- jags.model(textConnection(jags_model_mix), data = jags_data_H4, inits = make_inits(2), n.chains = 2, quiet = TRUE)
+
+update(model_H4, n.iter = 1000)
+samples_H4 <- jags.samples(model_H4, variable.names = c("pi_weights", "alpha", "beta", "log_lik"), n.iter = 2000)
+
+waic_H4 <- compute_waic_from_loglik(samples_H4$log_lik)
+cat("WAIC for H = 4:", waic_H4, "\n")
+```
+
+$H = 5$
+
+```{r}
+cat("Fitting Model H = 5...\n")
+
+jags_data_H5 <- list(x = my_data, N = N, H = 5, ones = rep(1, 5))
+model_H5 <- jags.model(textConnection(jags_model_mix), data = jags_data_H5, inits = make_inits(2), n.chains = 2, quiet = TRUE)
+
+update(model_H5, n.iter = 1000)
+samples_H5 <- jags.samples(model_H5, variable.names = c("pi_weights", "alpha", "beta", "log_lik"), n.iter = 2000)
+
+waic_H5 <- compute_waic_from_loglik(samples_H5$log_lik)
+cat("WAIC for H = 5:", waic_H5, "\n")
+```
+
+**Reading the WAIC, not just its minimum.** A single WAIC value hides
+its sampling uncertainty: each model has a standard error (SE), and two
+models whose WAIC differ by less than roughly $1$-$2$ SE are
+statistically indistinguishable. We therefore report the full table with
+`ELPD`, the effective number of parameters `p_eff` ($= p_{\text{WAIC}}$,
+the complexity penalty), `WAIC`, and its `SE`, and we run `loo_compare`,
+which ranks the models and gives the pairwise `elpd_diff` together with
+its `se_diff`. When several $H$ values are tied within the noise, the
+**most parsimonious** among them is preferable to the bare `which.min`.
+
+```{r}
+# Compute WAIC estimates for models with varying number of components (H)
+waic_objs <- list(
+  "H=1" = waic_from_loglik(samples_H1$log_lik),
+  "H=2" = waic_from_loglik(samples_H2$log_lik),
+  "H=3" = waic_from_loglik(samples_H3$log_lik),
+  "H=4" = waic_from_loglik(samples_H4$log_lik),
+  "H=5" = waic_from_loglik(samples_H5$log_lik)
+)
+
+all_waic_values <- sapply(waic_objs, function(w) w$estimates["waic", "Estimate"])
+waic_se         <- sapply(waic_objs, function(w) w$estimates["waic", "SE"])
+
+# Generate and display the model comparison table
+waic_table <- do.call(rbind, Map(ic_row, waic_objs, names(waic_objs)))
+cat("--- MODEL SELECTION: WAIC with standard errors ---\n")
+print(waic_table, row.names = FALSE)
+
+cat("\n--- loo_compare (differences vs the best model) ---\n")
+print(loo_compare(waic_objs))
+
+# Identify the absolute minimum and the parsimonious optimal model
+lowest_H <- which.min(all_waic_values)
+chosen_H <- select_parsimonious(all_waic_values, waic_se, complexity = 1:5)
+cat("\n Lowest-WAIC model: H =", lowest_H, "components\n")
+cat("Parsimonious choice (within 1 SE): H =", chosen_H, "components\n")
+cat("    (models within 1 SE of the lowest WAIC are statistically tied;\n",
+    "     we keep the simplest among them rather than the bare which.min.)\n")
+```
+
+## Now visualise the results
+
+To visually reinforce this selection process, we plot the WAIC scores
+across all models alongside their $\pm 1$ SE bounds, highlighting both
+the absolute minimum and the parsimonious choice.
+
+```{r}
+# Define dynamic y-axis limits incorporating standard errors
+ylim_waic <- range(c(all_waic_values - waic_se, all_waic_values + waic_se))
+
+# Plot WAIC scores across model configurations
+plot(1:5, all_waic_values,
+     type = "b", pch = 19, cex = 1.5, col = "steelblue", lwd = 2,
+     ylim = ylim_waic,
+     xlab = "Number of Components (H)",
+     ylab = "WAIC (lower is better)",
+     main = "Model Selection: WAIC by Number of Components (bars = +/-1 SE)",
+     xaxt = "n")
+axis(1, at = 1:5)
+
+# Add +/-1 SE error bars to represent estimate uncertainty
+arrows(1:5, all_waic_values - waic_se, 1:5, all_waic_values + waic_se,
+       angle = 90, code = 3, length = 0.05, col = "steelblue")
+
+# Highlight absolute best configuration vs selected parsimonious model
+lowest_H <- which.min(all_waic_values)
+best_H   <- select_parsimonious(all_waic_values, waic_se, complexity = 1:5)
+points(lowest_H, all_waic_values[lowest_H], col = "gray60", pch = 1, cex = 3, lwd = 2)
+points(best_H,   all_waic_values[best_H],   col = "tomato", pch = 19, cex = 1.8)
+
+legend("topright",
+       legend = c(paste("Lowest WAIC: H =", lowest_H),
+                  paste("Chosen (1 SE): H =", best_H)),
+       text.col = c("gray60", "tomato"), bty = "n")
+```
+
+While Information Criteria provide a quantitative measure for model
+selection, visual predictive checks remain crucial. The following plots
+compare the empirical distribution of the load factor against the
+implied predictive mixture density for each evaluated complexity ($H=1$
+to $5$). This visual comparison allows us to observe how the addition of
+latent components progressively captures the multimodality and the
+specific peaks of the empirical data, confirming the numerical results
+obtained via WAIC.
+
+```{r}
+# Group all samples into a list for easy looping
+all_samples <- list(samples_H1, samples_H2, samples_H3, samples_H4, samples_H5)
+
+# Set up grid for side-by-side model comparison plots
+par(mfrow = c(2, 3), mar = c(4, 4, 3, 1))
+
+x_seq <- seq(0.001, 0.999, length.out = 500)
+
+for (h in 1:5) {
+  # Extract posterior expectations for weights and Beta parameters
+  current_samples <- all_samples[[h]]
+  
+  if (h == 1) {
+    est_pi    <- 1
+    est_alpha <- mean(current_samples$alpha)
+    est_beta  <- mean(current_samples$beta)
+  } else {
+    est_pi    <- apply(current_samples$pi_weights, 1, mean)
+    est_alpha <- apply(current_samples$alpha, 1, mean)
+    est_beta  <- apply(current_samples$beta, 1, mean)
+  }
+  
+  # Draw baseline empirical distribution
+  hist(my_data, breaks = 30, freq = FALSE,
+       col = "lightgray", border = "white",
+       xlab = "Load Factor", main = paste("Fit with H =", h))
+  
+  # Compute and overlay the implied predictive mixture density
+  total_density <- rep(0, 500)
+  for (c in 1:h) {
+    total_density <- total_density + est_pi[c] * dbeta(x_seq, est_alpha[c], est_beta[c])
+  }
+  lines(x_seq, total_density, col = "steelblue", lwd = 2.5)
+}
+
+# Restore default single-plot layout
+par(mfrow = c(1, 1))
+```
+
+Having identified the optimal and most parsimonious configuration, we
+now deconstruct its latent structure. The plot below illustrates the
+selected Beta mixture model overlaid on the empirical data. Alongside
+the overall mixture density (solid line), we visualize the individual,
+weighted Beta components (dashed lines). This explicitly shows how the
+different latent regimes combine to form the overall distribution of the
+data.
+
+```{r}
+# Extract samples of the winning model
+best_samples <- all_samples[[best_H]]
+
+if (best_H == 1) {
+  best_pi    <- 1
+  best_alpha <- mean(best_samples$alpha)
+  best_beta  <- mean(best_samples$beta)
+} else {
+  best_pi    <- apply(best_samples$pi_weights, 1, mean)
+  best_alpha <- apply(best_samples$alpha, 1, mean)
+  best_beta  <- apply(best_samples$beta, 1, mean)
+}
+
+# Print the final parameters to the console
+cat("\n--- POSTERIOR MEANS OF THE BEST MODEL (H =", best_H, ") ---\n")
+final_params <- data.frame(Component = 1:best_H, Weight_Pi = best_pi, Alpha = best_alpha, Beta = best_beta)
+print(round(final_params, 3))
+
+# Plot empirical distribution for the selected optimal model
+hist(my_data, breaks = 40, freq = FALSE,
+     col = "tomato", border = "white",
+     xlab = "Load factor (hourly / daily peak)",
+     main = paste("Optimal Beta Mixture Anatomy (H =", best_H, ")"))
+
+# Calculate total mixture density and overlay constituent latent distributions
+total_density <- rep(0, 500)
+
+for (c in 1:best_H) {
+  # Scale individual Beta component density by its posterior weight
+  comp_density  <- best_pi[c] * dbeta(x_seq, best_alpha[c], best_beta[c])
+  total_density <- total_density + comp_density
+  
+  # Overlay individual latent component profiles
+  if (best_H > 1) {
+    lines(x_seq, comp_density, col = "black", lty = 2, lwd = 2)
+  }
+}
+
+# Draw the combined mixture density profile
+lines(x_seq, total_density, col = "midnightblue", lwd = 4)
+
+if (best_H > 1) {
+  legend("topright", 
+         legend = c("Empirical Data", "Overall Mixture", "Latent Components"),
+         fill = c("tomato", NA, NA),
+         border = c("white", NA, NA),
+         col = c(NA, "midnightblue", "black"), 
+         lty = c(NA, 1, 2), 
+         lwd = c(NA, 4, 2),
+         bty = "n")
+}
+```
+
+## MCMC Diagnostics: The Label Switching Problem
+
+In a mixture model the $H$ components are **exchangeable**: permuting
+their labels leaves the joint likelihood unchanged, so the posterior has
+up to $H!$ equivalent modes — one for each relabelling of the same
+solution. When two MCMC chains independently explore different
+permutations, the raw parameter traces cross and swap between
+iterations, a phenomenon known as **label switching**. Naively averaging
+parameters across such chains would blend draws from different
+permutations, producing meaningless component summaries.
+
+Although the overall mixture density accurately captures the empirical
+data, directly averaging the raw component parameters across all MCMC
+iterations can therefore be misleading. To diagnose whether label
+switching is occurring, we inspect the trace plots.
+
+```{r}
+
+raw_samples <- all_samples[[best_H]]
+
+raw_pi_mat    <- matrix(raw_samples$pi_weights, nrow = best_H)
+raw_alpha_mat <- matrix(raw_samples$alpha, nrow = best_H)
+raw_beta_mat  <- matrix(raw_samples$beta, nrow = best_H)
+
+alpha_array <- raw_samples$alpha
+beta_array  <- raw_samples$beta
+pi_array <- raw_samples$pi_weights
+
+n_iter   <- dim(alpha_array)[2]
+n_chains <- dim(alpha_array)[3]
+
+chain_colors <- 1:n_chains
+
+# Diagnostics for alpha.
+par(mfrow = c(2, 2), mar = c(4, 4, 3, 1))
+
+for (h in 1:best_H) {
+  y_lims <- range(alpha_array[h, , ])
+  
+  plot(1:n_iter, alpha_array[h, , 1], type = "l", col = chain_colors[1],
+       ylim = y_lims, xlab = "Iterations", ylab = "",
+       main = paste0("Trace of alpha[", h, "]"))
+  
+  if (n_chains > 1) {
+    for (c in 2:n_chains) {
+      lines(1:n_iter, alpha_array[h, , c], col = chain_colors[c])
+    }
+  }
+  
+  plot(density(raw_alpha_mat[h, ]),
+       main = paste0("Density of alpha[", h, "]"),
+       xlab = "", ylab = "Density")
+}
+
+# Diagnostics for beta.
+for (h in 1:best_H) {
+  y_lims <- range(beta_array[h, , ])
+  
+  plot(1:n_iter, beta_array[h, , 1], type = "l", col = chain_colors[1],
+       ylim = y_lims, xlab = "Iterations", ylab = "",
+       main = paste0("Trace of beta[", h, "]"))
+  
+  if (n_chains > 1) {
+    for (c in 2:n_chains) {
+      lines(1:n_iter, beta_array[h, , c], col = chain_colors[c])
+    }
+  }
+  
+  plot(density(raw_beta_mat[h, ]),
+       main = paste0("Density of beta[", h, "]"),
+       xlab = "", ylab = "Density")
+}
+
+# Diagnostics for pi.
+for (h in 1:best_H) {
+  y_lims <- range(pi_array[h, , ])
+  
+  plot(1:n_iter, pi_array[h, , 1], type = "l", col = chain_colors[1],
+       ylim = y_lims, xlab = "Iterations", ylab = "",
+       main = paste0("Trace of pi[", h, "]"))
+  
+  if (n_chains > 1) {
+    for (c in 2:n_chains) {
+      lines(1:n_iter, pi_array[h, , c], col = chain_colors[c])
+    }
+  }
+  
+  plot(density(raw_pi_mat[h, ]),
+       main = paste0("Density of pi[", h, "]"),
+       xlab = "", ylab = "Density")
+}
+
+par(mfrow = c(1, 1))
+```
+
+Now we calculate $\hat{R}$ :
+
+```{r}
+
+# Compute Gelman-Rubin convergence diagnostic (R-hat) across MCMC chains
+calculate_rhat_table <- function(alpha_array, beta_array, pi_array, best_H, n_chains) {
+  
+  # Vectors to store the point estimates
+  rhat_alpha <- numeric(best_H)
+  rhat_beta  <- numeric(best_H)
+  rhat_pi    <- numeric(best_H)
+  
+  for (h in 1:best_H) {
+    # Gelman-Rubin Diagnostic for Alpha
+    chain_list_alpha <- list()
+    for (c in 1:n_chains) {
+      chain_list_alpha[[c]] <- mcmc(alpha_array[h, , c])
+    }
+    gr_alpha <- gelman.diag(as.mcmc.list(chain_list_alpha), autoburnin = FALSE)
+    rhat_alpha[h] <- gr_alpha$psrf[1, 1] # Extract Point Estimate
+    
+    # Gelman-Rubin Diagnostic for Beta
+    chain_list_beta <- list()
+    for (c in 1:n_chains) {
+      chain_list_beta[[c]] <- mcmc(beta_array[h, , c])
+    }
+    gr_beta <- gelman.diag(as.mcmc.list(chain_list_beta), autoburnin = FALSE)
+    rhat_beta[h] <- gr_beta$psrf[1, 1] # Extract Point Estimate
+    
+    # Gelman-Rubin Diagnostic for Pi (Weights)
+    chain_list_pi <- list()
+    for (c in 1:n_chains) {
+      chain_list_pi[[c]] <- mcmc(pi_array[h, , c])
+    }
+    gr_pi <- gelman.diag(as.mcmc.list(chain_list_pi), autoburnin = FALSE)
+    rhat_pi[h] <- gr_pi$psrf[1, 1] # Extract Point Estimate
+  }
+  
+  # Generate variable names dynamically
+  alpha_names <- paste0("alpha[", 1:best_H, "]")
+  beta_names  <- paste0("beta[", 1:best_H, "]")
+  pi_names    <- paste0("pi[", 1:best_H, "]")
+  
+  # Assemble diagnostics into a single dataframe for presentation
+  rhat_table <- data.frame(
+    Variable = c(alpha_names, beta_names, pi_names),
+    Raw_R_hat = round(c(rhat_alpha, rhat_beta, rhat_pi), 4)
+  )
+  
+  return(rhat_table)
+}
+
+# Evaluate convergence using the 3D raw sample arrays from JAGS
+rhat_table_output <- calculate_rhat_table(raw_samples$alpha, 
+                                          raw_samples$beta, 
+                                          raw_samples$pi_weights, 
+                                          best_H, 
+                                          n_chains)
+
+print(rhat_table_output, row.names = FALSE)
+```
+
+The traces show the characteristic label-switching signature: chains
+running on separate tracks that occasionally cross, and multimodal
+marginal densities for each raw component parameter. The $\hat{R}$
+values in the table above, several of which exceed the conventional 1.10
+threshold, formally confirm this instability. At this point two
+explanations are possible: the chains genuinely failed to mix and
+explore the posterior, or the high $\hat{R}$ is a statistical artifact
+caused by the chains sampling from different, but equivalent, label
+permutations of a well-mixed sampler.
+
+To distinguish between the two explanations, we evaluate $\hat{R}$ and
+the Effective Sample Size (ESS) on the **marginal log-likelihood**
+$\ell^{(s)} = \sum_{i=1}^N \log p(x_i \mid \boldsymbol{\theta}^{(s)})$.
+This scalar is a function of the full mixture density, which is
+invariant to any relabelling of the components, so it is unaffected by
+label switching.
+
+```{r}
+loglik_array <- raw_samples$log_lik
+
+n_iter   <- dim(loglik_array)[2]
+n_chains <- dim(loglik_array)[3]
+
+# Marginalize out component labels by summing point-wise log-likelihoods
+global_loglik <- apply(loglik_array, c(2, 3), sum)
+
+# Format global log-likelihood iterations into an mcmc.list object
+loglik_chains <- list()
+for (c in 1:n_chains) {
+  loglik_chains[[c]] <- mcmc(global_loglik[, c])
+}
+loglik_mcmc_list <- as.mcmc.list(loglik_chains)
+
+# Compute permutation-invariant convergence statistics
+rhat_loglik <- gelman.diag(loglik_mcmc_list, autoburnin = FALSE)$psrf[1, 1]
+ess_loglik  <- effectiveSize(loglik_mcmc_list)
+
+# Assemble diagnostics table
+likelihood_diagnostic_table <- data.frame(
+  Metric = c("R-hat ", "ESS  "),
+  Value  = c(round(rhat_loglik, 4), round(ess_loglik, 2))
+)
+
+cat("Likelihood Convergence Diagnostic (Permutation-Invariant Scale)\n\n")
+print(likelihood_diagnostic_table, row.names = FALSE)
+```
+
+The table above shows $\hat{R} \approx 1$ and a healthy ESS, confirming
+that the sampler has reached global convergence. The instability in the
+raw component parameters is therefore purely an artifact of the chains
+sampling from different label permutations of the same posterior mode.
+
+To restore parameter identifiability for reporting, we apply a
+**post-hoc re-labelling**: at each MCMC draw we sort the $H$ components
+by their theoretical Beta mean,
+
+$$\mathbb{E}[X_h] = \frac{\alpha_h}{\alpha_h + \beta_h},$$
+
+from smallest to largest. This criterion is the natural choice because
+$\mathbb{E}[X_h]$ is the "location" of component $h$ on the $(0,1)$
+interval: it identifies whether a component captures low, medium, or
+high load-factor observations regardless of which numeric label JAGS
+happened to assign at that step. After re-ordering, "Component 1"
+consistently refers to the lowest-mean Beta across all draws and chains,
+making per-component summaries comparable. This post-hoc step does not
+alter the fit: the mixture density and the WAIC are unchanged; it only
+resolves the label ambiguity for interpretation.
+
+```{r}
+
+best_samples <- all_samples[[best_H]]
+
+pi_mat    <- matrix(best_samples$pi_weights, nrow = best_H)
+alpha_mat <- matrix(best_samples$alpha, nrow = best_H)
+beta_mat  <- matrix(best_samples$beta, nrow = best_H)
+
+S_totale <- ncol(pi_mat)
+x_seq    <- seq(0.001, 0.999, length.out = 500)
+
+component_curves <- array(0, dim = c(best_H, S_totale, length(x_seq)))
+
+cat("Sorting MCMC chains and calculating posterior densities...\n")
+
+# Post-processing loop to reorder draws and handle label switching
+for (s in 1:S_totale) {
+  
+  beta_means <- alpha_mat[, s] / (alpha_mat[, s] + beta_mat[, s])
+  ordered_indices <- order(beta_means)
+  
+  for (h in 1:best_H) {
+    idx <- ordered_indices[h]
+    
+    density_h <- pi_mat[idx, s] * dbeta(x_seq, alpha_mat[idx, s], beta_mat[idx, s])
+    
+    component_curves[h, s, ] <- density_h
+  }
+}
+
+# Average curves over iterations to obtain point estimates of latent profiles
+final_components      <- apply(component_curves, c(1, 3), mean)
+final_overall_mixture <- colSums(final_components)
+
+# PLOTTING
+
+hist(my_data, breaks = 40, freq = FALSE,
+     col = "tomato", border = "white",
+     xlab = "Load factor (hourly / daily peak)",
+     main = paste("Label-Switching Proof Anatomy (H =", best_H, ")"))
+
+# Overlay identified, sorted latent components
+colors_for_components <- c("black", "darkgreen", "purple", "darkorange", "brown")
+for (h in 1:best_H) {
+  lines(x_seq, final_components[h, ], col = colors_for_components[h], lty = 2, lwd = 2.5)
+}
+
+# Overlay final posterior predictive mixture profile
+lines(x_seq, final_overall_mixture, col = "midnightblue", lwd = 4)
+
+legend_labels <- c("Empirical Data", "Overall Mixture", paste("Component", 1:best_H))
+legend_colors <- c(NA, "midnightblue", colors_for_components[1:best_H])
+legend_lines  <- c(NA, 1, rep(2, best_H))
+legend_widths <- c(NA, 4, rep(2.5, best_H))
+
+legend("topright", 
+       legend = legend_labels,
+       fill = c("tomato", rep(NA, best_H + 1)),
+       border = c("white", rep(NA, best_H + 1)),
+       col = legend_colors, 
+       lty = legend_lines, 
+       lwd = legend_widths,
+       bty = "n",
+       cex = 0.9)
+```
+
+Having resolved the label-switching ambiguity, we can now safely extract
+meaningful posterior summaries for each individual component. The final
+step is to isolate these latent Beta distributions to examine their
+specific profiles and parameter uncertainties. Below, we visualize each
+sorted component independently, alongside its expected weight, shape
+parameters ($\alpha$, $\beta$), and theoretical mean. Furthermore, we
+compute the 95% equal-tailed credible intervals for the parameters,
+providing a rigorous quantification of the posterior uncertainty for
+each identified cluster within the data.
+
+```{r}
+best_samples <- all_samples[[best_H]]
+
+pi_mat    <- matrix(best_samples$pi_weights, nrow = best_H)
+alpha_mat <- matrix(best_samples$alpha,      nrow = best_H)
+beta_mat  <- matrix(best_samples$beta,       nrow = best_H)
+S_tot     <- ncol(pi_mat)
+
+pi_ord    <- matrix(0, best_H, S_tot)
+alpha_ord <- matrix(0, best_H, S_tot)
+beta_ord  <- matrix(0, best_H, S_tot)
+
+# Reorder MCMC draws post-hoc by ascending component means to resolve label switching
+for (s in 1:S_tot) {
+  ord <- order(alpha_mat[, s] / (alpha_mat[, s] + beta_mat[, s]))
+  pi_ord[, s]    <- pi_mat[ord, s]
+  alpha_ord[, s] <- alpha_mat[ord, s]
+  beta_ord[, s]  <- beta_mat[ord, s]
+}
+
+# Helper to compute posterior expectations and 95% equal-tailed credible intervals
+summ <- function(m) cbind(mean = rowMeans(m),
+                          lwr  = apply(m, 1, quantile, 0.025),
+                          upr  = apply(m, 1, quantile, 0.975))
+A <- summ(alpha_ord); B <- summ(beta_ord); P <- summ(pi_ord)
+comp_mean <- A[, "mean"] / (A[, "mean"] + B[, "mean"])
+
+# Generate summary table for the identified mixture components
+tab <- data.frame(
+  Componente = 1:best_H,
+  Peso_pi    = round(P[, "mean"], 3),
+  Alpha      = round(A[, "mean"], 3),
+  Beta       = round(B[, "mean"], 3),
+  Media      = round(comp_mean, 3),
+  Alpha_IC   = paste0("[", round(A[, "lwr"], 2), ", ", round(A[, "upr"], 2), "]"),
+  Beta_IC    = paste0("[", round(B[, "lwr"], 2), ", ", round(B[, "upr"], 2), "]")
+)
+cat(" component parameters (posterior mean, IC 95%) \n")
+print(tab, row.names = FALSE)
+
+x_seq <- seq(0.001, 0.999, length.out = 500)
+cols  <- c("black", "darkgreen", "purple", "darkorange", "brown")
+
+# Evaluate densities using posterior parameter expectations
+dens_mat <- sapply(1:best_H, function(h) dbeta(x_seq, A[h, "mean"], B[h, "mean"]))
+
+ylim_common <- c(0, 10)
+xlim_common <- c(0, 1)
+
+# Plot individual component profiles in a multi-figure layout
+par(mfrow = c(ceiling(best_H / 2), 2), mar = c(4, 4, 3, 1))
+for (h in 1:best_H) {
+  plot(x_seq, dens_mat[, h], type = "l", lwd = 3, col = cols[h],
+       xlim = xlim_common, ylim = ylim_common,
+       xlab = "Load factor", ylab = "Density",
+       main = paste("Component", h))
+  legend("topleft", bty = "n", cex = 0.9, text.col = cols[h],
+         legend = c(sprintf("weight  = %.3f", P[h, "mean"]),
+                    sprintf("alpha = %.2f", A[h, "mean"]),
+                    sprintf("beta  = %.2f", B[h, "mean"]),
+                    sprintf("mean = %.3f", comp_mean[h])))
+}
+par(mfrow = c(1, 1))
+```
+
+# Prior Sensitivity Analysis
+
+The mixture model results depend on two hyperparameter choices: the rate
+$\lambda$ of the Exponential prior on the shape parameters ($\alpha_h,
+\beta_h$), and the concentration $c$ of the symmetric Dirichlet prior on
+the mixture weights $\boldsymbol{\pi}$. A sensitivity analysis checks
+whether these choices are driving the conclusions — specifically,
+whether the selected $H$, the inferred component shapes, and the WAIC
+change when the priors become more or less diffuse. If results are
+stable across settings the inference is data-driven; if they shift, the
+prior is influential and the choice requires more careful justification.
+
+We refit the best-$H$ model under four configurations, varying one
+hyperparameter at a time while holding the rest fixed:
+
+| Setting | $\lambda$ | Dir. conc. $c$ | Interpretation |
+|------------------|------------------|------------------|------------------|
+| **Reference** | 0.10 | 1.0 | Current prior: $\mathbb{E}[\alpha_h] = 10$ |
+| Very diffuse | 0.01 | 1.0 | Shape parameters up to $\sim\!200$ allowed |
+| Informative | 1.00 | 1.0 | Shape parameters concentrated near 1 |
+| Sparse Dirichlet | 0.10 | 0.1 | Encourages one dominant component |
+
+```{r}
+# Parameterised JAGS model
+jags_model_sens <- "
+model {
+  for (i in 1:N) {
+    z[i] ~ dcat(pi_weights[1:H])
+    x[i] ~ dbeta(alpha[z[i]], beta[z[i]])
+    for (h in 1:H) {
+      lcomp[i, h] <- log(pi_weights[h]) + logdensity.beta(x[i], alpha[h], beta[h])
+    }
+    mx[i]      <- max(lcomp[i, 1:H])
+    for (h in 1:H) { e[i, h] <- exp(lcomp[i, h] - mx[i]) }
+    log_lik[i] <- mx[i] + log(sum(e[i, 1:H]))
+  }
+  pi_weights[1:H] ~ ddirch(dir_conc[1:H])
+  for (h in 1:H) {
+    alpha[h] ~ dexp(lambda_exp)
+    beta[h]  ~ dexp(lambda_exp)
+  }
+}
+"
+
+# Helper: fit best_H model with given hyperparameters
+fit_sensitivity <- function(H, lambda_exp, dir_conc_val) {
+  dat <- list(x          = my_data,
+              N          = N,
+              H          = H,
+              lambda_exp = lambda_exp,
+              dir_conc   = rep(dir_conc_val, H))
+  m <- jags.model(textConnection(jags_model_sens), data = dat,
+                  inits = make_inits(2), n.chains = 2, quiet = TRUE)
+  update(m, n.iter = 1000)
+  jags.samples(m, variable.names = c("pi_weights", "alpha", "beta", "log_lik"),
+               n.iter = 2000)
+}
+
+# Helper: label-switching-invariant posterior predictive density
+compute_ppd_sens <- function(samps, H, x_grid) {
+  pi_m <- matrix(samps$pi_weights, nrow = H)
+  al_m <- matrix(samps$alpha,      nrow = H)
+  be_m <- matrix(samps$beta,       nrow = H)
+  S    <- ncol(pi_m)
+  rowMeans(sapply(seq_len(S), function(s) {
+    d <- numeric(length(x_grid))
+    for (h in seq_len(H))
+      d <- d + pi_m[h, s] * dbeta(x_grid, al_m[h, s], be_m[h, s])
+    d
+  }))
+}
+```
+
+```{r}
+sens_settings <- list(
+  list(label = "Reference (λ=0.1, c=1.0)",     lambda = 0.10, dir = 1.0),
+  list(label = "Very diffuse (λ=0.01, c=1.0)", lambda = 0.01, dir = 1.0),
+  list(label = "Informative (λ=1.0, c=1.0)",   lambda = 1.00, dir = 1.0),
+  list(label = "Sparse Dir. (λ=0.1, c=0.1)",   lambda = 0.10, dir = 0.1)
+)
+
+# Setting 1 is already fitted as best_H in Task 1 — reuse it directly.
+# Settings 2-4 are refitted with the parameterised model above.
+sens_samples <- vector("list", length(sens_settings))
+sens_samples[[1]] <- all_samples[[best_H]]
+
+for (j in 2:length(sens_settings)) {
+  s <- sens_settings[[j]]
+  cat("Sensitivity fit:", s$label, "\n")
+  sens_samples[[j]] <- fit_sensitivity(best_H, s$lambda, s$dir)
+}
+
+# WAIC comparison table across prior settings
+sens_waic_objs <- lapply(sens_samples, function(sf)
+  waic_from_loglik(sf$log_lik))
+
+sens_table <- do.call(rbind, Map(function(w, nm) ic_row(w, nm),
+                                 sens_waic_objs,
+                                 sapply(sens_settings, `[[`, "label")))
+cat("\n--- PRIOR SENSITIVITY: WAIC for H =", best_H, "---\n")
+print(sens_table, row.names = FALSE)
+```
+
+```{r}
+# Overlay the posterior predictive density for each prior setting.
+# no re-ordering is needed here.
+x_grid_s  <- seq(0.001, 0.999, length.out = 500)
+sens_cols  <- c("midnightblue", "tomato", "darkgreen", "darkorange")
+sens_ltys  <- c(1, 2, 4, 3)
+sens_lwds  <- c(3, 2, 2, 2)
+
+ppd_list <- lapply(sens_samples, function(sf)
+  compute_ppd_sens(sf, best_H, x_grid_s))
+
+hist(my_data, breaks = 40, freq = FALSE,
+     col = "lightgray", border = "white",
+     xlab = "Load factor",
+     main = paste("Prior sensitivity — posterior predictive density (H =", best_H, ")"))
+
+for (j in seq_along(sens_settings)) {
+  lines(x_grid_s, ppd_list[[j]],
+        col  = sens_cols[j],
+        lwd  = sens_lwds[j],
+        lty  = sens_ltys[j])
+}
+
+legend("topright",
+       legend = sapply(sens_settings, `[[`, "label"),
+       col = sens_cols, lwd = sens_lwds, lty = sens_ltys,
+       bty = "n", cex = 0.8)
+```
+
+**Interpretation of Sensitivity Results**
+If the four predictive curves largely overlap, it indicates that the
+mixture shape is robust and insensitive to the chosen priors, confirming
+that the data are strongly driving the inference. Conversely, a curve
+that departs significantly from the reference identifies a prior that is
+restrictive enough—relative to the sample size—to pull the posterior
+away from the likelihood. Finally, examining the WAIC differences across
+these settings reveals whether the prior selection materially affects
+the out-of-sample predictive accuracy.
+
+# Task 2
+
+Objective: overlay the **posterior predictive density** on the empirical
+histogram and verify that the modes (the peaks of the data) are
+recovered by the model selected in Task 1.
+
+## Posterior predictive density
+
+The fully Bayesian overlay is the **posterior predictive density**,
+obtained by averaging the mixture density over the *entire* posterior
+(the latent $z$ is already integrated out inside each mixture term):
+$$p(\tilde x \mid \text{data})
+= \frac{1}{S}\sum_{s=1}^S \sum_{h=1}^H
+  \pi_h^{(s)}\,\text{Beta}\!\left(\tilde x \mid \alpha_h^{(s)}, \beta_h^{(s)}\right).$$
+
+We average the **densities**, not the parameters. This way the curve
+accounts for posterior uncertainty. A useful side effect: because each
+draw contributes its *whole* mixture (the inner sum over $h$),
+relabelling the components of any given draw leaves that sum unchanged —
+the result is automatically **invariant to label switching**, with no
+need for any reordering trick.
+
+```{r}
+best_samples <- all_samples[[best_H]]
+x_grid <- seq(0.001, 0.999, length.out = 600)
+
+if (best_H == 1) {
+  alpha_s <- as.vector(best_samples$alpha)
+  beta_s  <- as.vector(best_samples$beta)
+  S_tot   <- length(alpha_s)
+  ppd     <- rowMeans(sapply(seq_len(S_tot),
+                             function(s) dbeta(x_grid, alpha_s[s], beta_s[s])))
+} else {
+  pi_mat    <- matrix(best_samples$pi_weights, nrow = best_H)
+  alpha_mat <- matrix(best_samples$alpha,      nrow = best_H)
+  beta_mat  <- matrix(best_samples$beta,       nrow = best_H)
+  S_tot     <- ncol(pi_mat)
+
+  # full mixture density for a single draw s
+  mix_density <- function(s) {
+    d <- numeric(length(x_grid))
+    for (h in 1:best_H)
+      d <- d + pi_mat[h, s] * dbeta(x_grid, alpha_mat[h, s], beta_mat[h, s])
+    d
+  }
+  # posterior predictive = average over all draws
+  ppd <- rowMeans(sapply(seq_len(S_tot), mix_density))
+}
+```
+
+## Overlay and mode recovery
+
+```{r}
+# A point is a local maximum if it exceeds both its neighbours
+local_maxima <- function(xx, yy) {
+  n   <- length(yy)
+  hit <- which(yy[2:(n - 1)] > yy[1:(n - 2)] & yy[2:(n - 1)] > yy[3:n]) + 1
+  xx[hit]
+}
+
+ppd_modes <- local_maxima(x_grid, ppd)
+cat("Posterior-predictive modes: ", round(ppd_modes, 3), "\n")
+
+hist(my_data, breaks = 40, freq = FALSE,
+     col = "lightgray", border = "white",
+     xlab = "Load factor (hourly / daily peak)",
+     main = paste("Task 2 — Posterior predictive overlay (H =", best_H, ")"))
+lines(x_grid, ppd, col = "midnightblue", lwd = 3)
+
+abline(v = ppd_modes, col = "tomato", lty = 2, lwd = 1.5)
+points(ppd_modes, approx(x_grid, ppd, ppd_modes)$y, pch = 19, col = "tomato")
+
+legend("topright", bty = "n", cex = 0.9,
+       legend = c("Posterior predictive", "Predictive modes"),
+       col = c("midnightblue", "tomato"),
+       lty = c(1, 2), lwd = c(3, 1.5), pch = c(NA, 19))
+```
+
+**Reading.** The posterior predictive curve (blue) is the Bayesian
+predictive density for a new observation given the data. The red dashed
+lines mark its local maxima: if they align with the visible peaks of the
+histogram the model has successfully recovered the modes of the data.
+With `best_H > 1` the mixture reproduces a multi-modal profile that a
+single Beta cannot.
+
+# Task 3
+
+Objective (**post-hoc exploration**): assign each observation to its
+maximum-a-posteriori (MAP) component, then plot the empirical fraction
+of observations in each component as a function of `hour`.
+
+In a mixture the latent indicator $z_i$ is the cluster label, so this
+step means assigning every observation to its most likely component and
+studying how those assignments vary across hours of the day.
+
+**Avoiding label switching.** We do not use the raw $z_i$ from a single
+MCMC draw (labels permute across iterations). Instead we compute
+**posterior responsibilities** using the components **re-ordered by
+their mean** at every draw (the same ordering used in the anatomy plot):
+$$r_{ih} = \frac{1}{S}\sum_{s=1}^S \frac{\pi^{(s)}_{(h)}\,\text{Beta}(x_i\mid\alpha^{(s)}_{(h)},\beta^{(s)}_{(h)})}{\sum_k \pi^{(s)}_{(k)}\,\text{Beta}(x_i\mid\alpha^{(s)}_{(k)},\beta^{(s)}_{(k)})},
+\qquad \hat z_i = \arg\max_h r_{ih},$$ where $(h)$ denotes the $h$-th
+component from the left (smallest mean). This makes "Component 1"
+consistently the lowest-mean component and the MAP assignment stable
+across chains.
+
+```{r}
+best_samples <- all_samples[[best_H]]
+
+# parameters as [H, S] matrices (S = iterations * chains)
+pi_mat    <- matrix(best_samples$pi_weights, nrow = best_H)
+alpha_mat <- matrix(best_samples$alpha,      nrow = best_H)
+beta_mat  <- matrix(best_samples$beta,       nrow = best_H)
+S_tot     <- ncol(pi_mat)
+
+# mean responsibilities: resp[i, h] = P(component h | x_i)
+resp <- matrix(0, nrow = N, ncol = best_H)
+
+for (s in 1:S_tot) {
+  # re-order components by increasing mean alpha/(alpha + beta)
+  ord <- order(alpha_mat[, s] / (alpha_mat[, s] + beta_mat[, s]))
+
+  w <- matrix(0, nrow = N, ncol = best_H)
+  for (h in 1:best_H) {
+    idx <- ord[h]
+    w[, h] <- pi_mat[idx, s] * dbeta(my_data, alpha_mat[idx, s], beta_mat[idx, s])
+  }
+  w <- w / rowSums(w)   # normalise -> responsibilities at this draw
+  resp <- resp + w
+}
+resp <- resp / S_tot
+
+# MAP assignment: each observation to its most probable component
+z_map <- apply(resp, 1, which.max)
+
+cat("Cluster sizes (MAP assignment):\n")
+print(table(factor(z_map, levels = 1:best_H)))
+```
+
+Empirical fraction of observations in each component as a function of
+the hour of the day.
+
+```{r}
+hours <- lf_fit$hour
+
+# hour x component contingency table, then row-proportions (each hour sums to 1)
+tab      <- table(factor(hours, levels = 0:23), factor(z_map, levels = 1:best_H))
+frac_mat <- prop.table(tab, margin = 1)
+
+cols <- c("black", "darkgreen", "purple", "darkorange", "brown")
+matplot(0:23, as.matrix(frac_mat), type = "b", pch = 19, lty = 1,
+        col = cols[1:best_H], lwd = 2,
+        xlab = "Hour of day",
+        ylab = "Fraction of observations in component",
+        main = "Cluster composition by hour (MAP assignment on z)")
+legend("topleft", legend = paste("Component", 1:best_H),
+       col = cols[1:best_H], lwd = 2, pch = 19, bty = "n")
+```
+
+A complementary view: raw observations coloured by their MAP component,
+plotted against hour. Jitter is added on the x-axis so overlapping
+points are visible.
+
+```{r}
+cols <- c("black", "darkgreen", "purple", "darkorange", "brown")
+
+plot(jitter(hours, amount = 0.3), my_data,
+     col  = adjustcolor(cols[z_map], alpha.f = 0.45),
+     pch  = 19, cex = 0.7,
+     xlab = "Hour of day", ylab = "Load factor",
+     main = "Load factor by hour — coloured by MAP component",
+     xaxt = "n")
+axis(1, at = seq(0, 23, by = 2))
+legend("topleft", legend = paste("Component", 1:best_H),
+       col = cols[1:best_H], pch = 19, bty = "n", cex = 0.9)
+```
+
+**Posterior Predictive Checking and Mode Recovery**
+The posterior predictive curve (blue) represents the expected Bayesian
+predictive density for a new observation given the observed data. To
+visually evaluate the model's goodness-of-fit, we examine the local
+maxima of this density, marked by the red dashed lines. If these
+theoretical peaks accurately align with the visible modes of the
+empirical histogram, it confirms that the model has successfully
+recovered the underlying structure of the data. Crucially, by selecting
+an optimal complexity of $H > 1$, the mixture framework flexibily
+reproduces a multi-modal profile that a single Beta distribution is
+fundamentally incapable of capturing.
+
+# Task 4
+
+Objective (**advanced**): fit a second model that performs
+*classification on `hour`*, using the component assignment from Task 3
+as the **response variable**, and plot the predicted probability of each
+component as a function of `hour`. We then compare these predicted
+curves with the empirical fractions of Task 3 and discuss the result.
+
+## From clustering to a supervised model on `hour`
+
+In Task 3 the latent label $\hat z_i \in \{1, \dots, H\}$ was obtained
+*unsupervised*, from the load factor alone. Here we turn the question
+around and ask: **how predictable is the component label from the time
+of day?** We treat $\hat z_i$ as the response of a supervised model
+whose only covariate is `hour`.
+
+Because the response has $H > 2$ levels, this is a **multinomial
+(multi-class) logistic regression**, the natural generalisation of the
+binomial logit to more than two categories. We keep one component as the
+**reference category** (here $h = 1$, the lowest-mean component) and
+model the log-odds of every other component against it.
+
+`hour` is a **cyclic** variable: hour $23$ is adjacent to hour $0$.
+Encoding it as a raw integer would wrongly treat midnight and 11pm as
+far apart, so we expand it on a **Fourier basis** of period $24$,
+$$s_{ik} = \sin\!\left(\frac{2\pi k\,\mathrm{hour}_i}{24}\right), \qquad
+c_{ik} = \cos\!\left(\frac{2\pi k\,\mathrm{hour}_i}{24}\right),
+\qquad k = 1, \dots, K,$$ and use these $2K$ functions as covariates. A
+small number of harmonics $K$ is enough; we pick $K$ by WAIC, exactly as
+we chose $H$ in Task 1.
+
+## Mathematical formulation
+
+For observation $i$ and component $h$ the linear predictor is
+$$\eta_{i,h} = \beta_{0,h} + \sum_{k=1}^{K}\bigl(\alpha_{k,h}\,s_{ik}
+            + \gamma_{k,h}\,c_{ik}\bigr),$$ with the reference class
+constrained to zero, $\beta_{0,1} = 0$ and
+$\alpha_{k,1} = \gamma_{k,1} = 0$ for all $k$. The class probabilities
+are recovered with the **softmax** transform
+$$P(z_i = h) = \frac{\exp(\eta_{i,h})}{\sum_{j=1}^{H}\exp(\eta_{i,j})},$$
+which automatically satisfies $\sum_h P(z_i = h) = 1$. By construction
+the predicted probabilities are **periodic** in `hour` with period $24$,
+exactly like the empirical curves of Task 3.
+
+We place vague $\mathcal{N}(0, 0.01)$ priors (in JAGS precision
+parametrisation, i.e. variance $100$) on the $H - 1$ free coefficient
+blocks, the same weakly informative choice used for the regression and
+mixture models in the lab.
+
+**On label switching.** The response $\hat z_i$ comes from the
+components **already re-ordered by increasing mean** in Task 3, so
+"component 1" is consistently the lowest-mean cluster. The labels are
+therefore stable and the comparison between predicted curves and
+empirical fractions is well defined.
+
+## Design matrices and JAGS model
+
+We pre-compute the sine/cosine matrices $S$ and $C$ in R and pass them
+to JAGS as data; the response is `z_map` from Task 3 and the covariate
+is `hours` (aligned with `my_data`). The JAGS code is the
+categorical-logit skeleton: `z[i] ~ dcat(pp[i, 1:H])` with `pp[i, ]`
+built from the softmax of the Fourier linear predictors. We also monitor
+the marginal per-observation log-likelihood
+`log_lik[i] = log(pp[i, z[i]])` so the same WAIC machinery from Task 1
+can select $K$.
+
+```{r}
+jags_model_logit <- "
+model {
+  for (i in 1:n) {
+    z[i] ~ dcat(pp[i, 1:H])
+    for (h in 1:H) {
+      eta[i, h]    <- beta0[h] +
+                      inprod(alpha[1:K, h], S[i, 1:K]) +
+                      inprod(gamma[1:K, h], C[i, 1:K])
+      expEta[i, h] <- exp(eta[i, h])
+      pp[i, h]     <- expEta[i, h] / sum(expEta[i, 1:H])
+    }
+   log_lik[i] <- log(pp[i, z[i]])
+  }
+
+  beta0[1] <- 0
+  for (k in 1:K) { alpha[k, 1] <- 0; gamma[k, 1] <- 0 }
+
+  for (h in 2:H) {
+    beta0[h] ~ dnorm(0, 0.01)
+    for (k in 1:K) {
+      alpha[k, h] ~ dnorm(0, 0.01)
+      gamma[k, h] ~ dnorm(0, 0.01)
+    }
+  }
+}
+"
+```
+
+Helper that builds the Fourier design for a given number of harmonics
+$K$, fits the model and returns the monitored samples. We keep the same
+sampler settings used throughout the project (2 chains, 1000 burn-in,
+2000 iterations); a final run would simply raise these.
+
+```{r}
+fit_logit_K <- function(K) {
+  # Fourier design matrices [n, K]; matrix() keeps them 2-D even when K = 1
+  S_mat <- matrix(sapply(1:K, function(k) sin(2 * pi * k * hours / 24)), nrow = N)
+  C_mat <- matrix(sapply(1:K, function(k) cos(2 * pi * k * hours / 24)), nrow = N)
+
+  dat <- list(z = z_map, n = N, H = best_H, K = K, S = S_mat, C = C_mat)
+  m <- jags.model(textConnection(jags_model_logit), data = dat,
+                  inits = make_inits(2), n.chains = 2, quiet = TRUE)
+  update(m, n.iter = 1000)
+  jags.samples(m, variable.names = c("beta0", "alpha", "gamma", "log_lik"),
+               n.iter = 2000)
+}
+```
+
+## Model selection over the number of harmonics
+
+We fit $K \in \{1, \dots, 5\}$ and compare them with WAIC, with the same
+machinery used in Task 1. A wider grid lets us *see* the elbow rather
+than assume it: a larger $K$ buys a wigglier probability profile, and we
+expect WAIC to stop improving once the harmonics start fitting noise. As
+in Task 1 we report `WAIC` with its `SE` and `p_eff`, and `loo_compare`
+with `elpd_diff`/`se_diff`, then pick the simplest $K$ that is not
+clearly beaten.
+
+```{r}
+K_grid     <- 1:5
+logit_fits <- vector("list", length(K_grid))
+waic_klist <- vector("list", length(K_grid))
+
+for (j in seq_along(K_grid)) {
+  K <- K_grid[j]
+  cat("Fitting multinomial logit with K =", K, "harmonic(s)...\n")
+  logit_fits[[j]] <- fit_logit_K(K)
+  waic_klist[[j]] <- waic_from_loglik(logit_fits[[j]]$log_lik)
+}
+names(waic_klist) <- paste0("K=", K_grid)
+
+# Precise vectors + comparison table (ELPD, p_eff, WAIC, SE)
+waic_logit  <- sapply(waic_klist, function(w) w$estimates["waic", "Estimate"])
+waic_logit_se <- sapply(waic_klist, function(w) w$estimates["waic", "SE"])
+logit_table <- do.call(rbind, Map(ic_row, waic_klist, names(waic_klist)))
+
+cat("\n TASK 4 MODEL SELECTION: WAIC with standard errors \n")
+print(logit_table, row.names = FALSE)
+
+cat("\n loo_compare (differences vs the best model) \n")
+print(loo_compare(waic_klist))
+
+lowest_K <- K_grid[which.min(waic_logit)]
+best_K   <- K_grid[select_parsimonious(waic_logit, waic_logit_se, complexity = K_grid)]
+cat("\n Lowest-WAIC number of harmonics: K =", lowest_K, "\n")
+cat(" Parsimonious choice (within 1 SE): K =", best_K, "\n")
+cat("    (K within 1 SE of the lowest WAIC are tied; we keep the smallest.)\n")
+```
+
+To visualize this selection, we plot the WAIC-vs-$K$ curve with $\pm 1$
+SE bounds, reading the optimal elbow directly from the diagnostic graph:
+
+```{r}
+ylim_k <- range(c(waic_logit - waic_logit_se, waic_logit + waic_logit_se))
+plot(K_grid, waic_logit, type = "b", pch = 19, cex = 1.4,
+     col = "steelblue", lwd = 2, ylim = ylim_k,
+     xlab = "Number of harmonics (K)", ylab = "WAIC (lower is better)",
+     main = "Task 4 — WAIC by number of harmonics (bars = +/-1 SE)",
+     xaxt = "n")
+axis(1, at = K_grid)
+arrows(K_grid, waic_logit - waic_logit_se, K_grid, waic_logit + waic_logit_se,
+       angle = 90, code = 3, length = 0.05, col = "steelblue")
+points(lowest_K, waic_logit[which.min(waic_logit)],
+       col = "gray60", pch = 1, cex = 3, lwd = 2)
+points(best_K, waic_logit[which(K_grid == best_K)],
+       col = "tomato", pch = 19, cex = 1.8)
+legend("topright",
+       legend = c(paste("Lowest WAIC: K =", lowest_K),
+                  paste("Chosen (1 SE): K =", best_K)),
+       text.col = c("gray60", "tomato"), bty = "n")
+```
+
+## Predicted probability curves
+
+To construct the predictive curves, we evaluate the posterior mean of
+$P(z = h)$ across a continuous grid of hour values spanning from 0 to
+23. Crucially, for each posterior draw, we reconstruct the Fourier
+components, form the linear predictors from the sampled coefficients,
+apply the softmax transformation, and *only then* average the resulting
+probabilities. Averaging the probabilities rather than the raw
+coefficients ensures that the final curves correctly propagate the
+non-linear posterior uncertainty.
+
+```{r}
+best_fit <- logit_fits[[which(K_grid == best_K)]]
+
+# Reshape monitored coefficients to draws.
+beta0_s <- matrix(best_fit$beta0, nrow = best_H)
+S_tot_l <- ncol(beta0_s)
+alpha_s <- array(best_fit$alpha, dim = c(best_K, best_H, S_tot_l))
+gamma_s <- array(best_fit$gamma, dim = c(best_K, best_H, S_tot_l))
+
+# Fourier design of the hour grid
+hour_grid <- 0:23
+Sg <- matrix(sapply(1:best_K, function(k) sin(2 * pi * k * hour_grid / 24)),
+             nrow = length(hour_grid))
+Cg <- matrix(sapply(1:best_K, function(k) cos(2 * pi * k * hour_grid / 24)),
+             nrow = length(hour_grid))
+
+# Posterior-mean predicted probabilities P(z = h | hour)
+P_pred <- matrix(0, nrow = length(hour_grid), ncol = best_H)
+for (s in 1:S_tot_l) {
+  eta <- matrix(0, nrow = length(hour_grid), ncol = best_H)
+  for (h in 1:best_H) {
+    eta[, h] <- beta0_s[h, s] + Sg %*% alpha_s[, h, s] + Cg %*% gamma_s[, h, s]
+  }
+  ex     <- exp(eta)
+  P_pred <- P_pred + ex / rowSums(ex)
+}
+P_pred <- P_pred / S_tot_l
+
+cols <- c("black", "darkgreen", "purple", "darkorange", "brown")
+matplot(hour_grid, P_pred, type = "l", lty = 1, lwd = 2.5,
+        col = cols[1:best_H], ylim = c(0, 1),
+        xlab = "Hour of day", ylab = "Predicted P(component | hour)",
+        main = paste0("Task 4 — Multinomial logit (K = ", best_K, ")"))
+legend("topright", legend = paste("Component", 1:best_H),
+       col = cols[1:best_H], lwd = 2.5, lty = 1, bty = "n")
+```
+
+## Comparison with the empirical fractions of Task 3
+
+Finally, we overlay the smooth logit-predicted curves (solid lines) onto
+the raw empirical fractions derived from Task 3 (points). If the two
+plot spaces agree, it indicates that the component assignment is
+effectively a deterministic function of the hour, meaning the supervised
+logit model has successfully learned a clean, periodic representation of
+the noisy empirical proportions.
+
+```{r}
+matplot(0:23, as.matrix(frac_mat), type = "p", pch = 19,
+        col = cols[1:best_H], ylim = c(0, 1),
+        xlab = "Hour of day", ylab = "Fraction / predicted probability",
+        main = "Task 4 vs Task 3 — predicted curves vs empirical fractions")
+matlines(hour_grid, P_pred, lty = 1, lwd = 2.5, col = cols[1:best_H])
+legend("topright",
+       legend = c(paste("Component", 1:best_H), "Empirical (Task 3)", "Logit (Task 4)"),
+       col = c(cols[1:best_H], "gray40", "gray40"),
+       pch = c(rep(19, best_H), 19, NA),
+       lty = c(rep(NA, best_H), NA, 1),
+       lwd = c(rep(NA, best_H), NA, 2.5),
+       bty = "n", cex = 0.85)
+```
+
+### Discussion: Model vs. Empirical Agreement
+
+The solid logit curves closely track the empirical points, illustrating
+clear temporal dynamics: the low-mean component dominates during the
+night and steadily decreases as the day progresses, whereas the
+high-mean component rises to dominate around the daily peak hours (with
+intermediate components bridging the transition).
+
+This strong alignment is theoretically expected, as both approaches
+estimate the identical quantity, $P(\text{component}\mid\text{hour})$.
+However, the differences in *how* they estimate it are highly
+informative. Task 3 calculates this by discretely counting observations
+hour-by-hour, yielding a noisy profile—especially during hours with
+fewer subsampled observations. Conversely, Task 4 fits a smooth,
+strictly periodic model that borrows statistical strength across
+adjacent hours via the Fourier basis.
+
+When minor discrepancies occur between the curves, they are typically
+found at these low-sample hours where the empirical estimate is least
+robust. The number of harmonics $K$, rigorously selected via WAIC,
+calibrates exactly how much fine-grained hourly variation the model is
+permitted to capture: an overly small $K$ would underfit genuine
+structural shifts, while an excessively large $K$ would chase the
+sampling noise. Overall, this synthesis confirms that the latent load
+structures uncovered by the unsupervised mixture are robustly and
+smoothly dictated by the time of day.
+
+# Prediction Exercise
+
+The multinomial logistic regression in Task 4 was fitted on the same
+observations used to derive the response $\hat z_i$, so the WAIC is an
+in-sample criterion. A held-out prediction exercise provides an
+out-of-sample check: it quantifies how well the model generalises to
+unseen hour-component pairs and whether `hour` carries genuinely
+predictive information beyond the unconditional class frequencies.
+
+**Experimental Setup:** We randomly split the $N$ observations into a
+training set (80%) and a test set (20%), keeping the `hour` and `z_map`
+pairs aligned. The multinomial logit with $K = K_\text{best}$ harmonics
+is refitted on the training subset only. The resulting posterior is then
+used to predict the component label of each test observation from its
+`hour`.
+
+**Evaluation Metrics:** We report the **log-loss** on the test set,
+$$\text{log-loss} = -\frac{1}{N_\text{test}}\sum_{i \in \text{test}}
+  \log \hat{P}(z_i = \hat z_{\text{map},i} \mid \text{hour}_i),$$
+
+and the **accuracy** (fraction of correctly predicted MAP labels). Both
+are compared against a **null baseline** that ignores `hour` entirely
+and always predicts the empirical class proportions observed in the
+training set. A model that outperforms the baseline confirms that
+time-of-day information improves prediction.
+
+```{r}
+set.seed(42)
+n_train_pred <- floor(0.8 * N)
+train_pred   <- sample(seq_len(N), n_train_pred)
+test_pred    <- setdiff(seq_len(N), train_pred)
+n_test_pred  <- length(test_pred)
+
+# Fourier design matrices for training and test subsets
+make_fourier <- function(h_vec, K, n) {
+  matrix(sapply(1:K, function(k) sin(2 * pi * k * h_vec / 24)),
+         nrow = n)
+}
+make_fourier_cos <- function(h_vec, K, n) {
+  matrix(sapply(1:K, function(k) cos(2 * pi * k * h_vec / 24)),
+         nrow = n)
+}
+
+S_tr <- make_fourier(    hours[train_pred], best_K, n_train_pred)
+C_tr <- make_fourier_cos(hours[train_pred], best_K, n_train_pred)
+S_te <- make_fourier(    hours[test_pred],  best_K, n_test_pred)
+C_te <- make_fourier_cos(hours[test_pred],  best_K, n_test_pred)
+
+# Refit the logit on the training subset only
+dat_tr <- list(z = z_map[train_pred], n = n_train_pred,
+               H = best_H, K = best_K, S = S_tr, C = C_tr)
+m_tr   <- jags.model(textConnection(jags_model_logit), data = dat_tr,
+                     inits = make_inits(2), n.chains = 2, quiet = TRUE)
+update(m_tr, n.iter = 1000)
+samp_tr <- jags.samples(m_tr,
+                        variable.names = c("beta0", "alpha", "gamma"),
+                        n.iter = 2000)
+```
+
+```{r}
+# Reshape posterior coefficient samples from the training fit
+beta0_tr <- matrix(samp_tr$beta0, nrow = best_H)
+S_tot_tr <- ncol(beta0_tr)
+alpha_tr <- array(samp_tr$alpha, dim = c(best_K, best_H, S_tot_tr))
+gamma_tr <- array(samp_tr$gamma, dim = c(best_K, best_H, S_tot_tr))
+
+# Posterior-mean predicted probabilities on the test set [n_test x H]
+P_te <- matrix(0, nrow = n_test_pred, ncol = best_H)
+for (s in seq_len(S_tot_tr)) {
+  eta <- matrix(0, nrow = n_test_pred, ncol = best_H)
+  for (h in seq_len(best_H))
+    eta[, h] <- beta0_tr[h, s] +
+                S_te %*% alpha_tr[, h, s] +
+                C_te %*% gamma_tr[, h, s]
+  ex   <- exp(eta)
+  P_te <- P_te + ex / rowSums(ex)
+}
+P_te <- P_te / S_tot_tr
+
+# Log-loss and accuracy
+z_te        <- z_map[test_pred]
+pred_probs  <- sapply(seq_len(n_test_pred), function(i) P_te[i, z_te[i]])
+log_loss_te <- -mean(log(pmax(pred_probs, 1e-10)))
+
+z_pred_te   <- apply(P_te, 1, which.max)
+acc_te      <- mean(z_pred_te == z_te)
+
+# Null baseline: empirical class proportions from training set
+train_props  <- tabulate(z_map[train_pred], nbins = best_H) / n_train_pred
+baseline_ll  <- -mean(log(pmax(train_props[z_te], 1e-10)))
+baseline_acc <- max(tabulate(z_map[train_pred])) / n_train_pred
+
+pred_table <- data.frame(
+  Metric   = c("Log-loss (lower is better)", "Accuracy (higher is better)"),
+  Model    = round(c(log_loss_te, acc_te),       3),
+  Baseline = round(c(baseline_ll, baseline_acc), 3)
+)
+cat("--- PREDICTION EXERCISE (test set, n =", n_test_pred, ") ---\n")
+print(pred_table, row.names = FALSE)
+```
+
+```{r}
+# Compare probability curves from the train-only fit against the
+# empirical fractions derived from the full data in Task 3.
+# Close agreement means the model generalises: the periodic pattern
+# learned on 80% of the data reproduces the full-data proportions.
+hour_grid_p <- 0:23
+Sg_p <- make_fourier(    hour_grid_p, best_K, length(hour_grid_p))
+Cg_p <- make_fourier_cos(hour_grid_p, best_K, length(hour_grid_p))
+
+P_grid <- matrix(0, nrow = length(hour_grid_p), ncol = best_H)
+for (s in seq_len(S_tot_tr)) {
+  eta <- matrix(0, nrow = length(hour_grid_p), ncol = best_H)
+  for (h in seq_len(best_H))
+    eta[, h] <- beta0_tr[h, s] +
+                Sg_p %*% alpha_tr[, h, s] +
+                Cg_p %*% gamma_tr[, h, s]
+  ex     <- exp(eta)
+  P_grid <- P_grid + ex / rowSums(ex)
+}
+P_grid <- P_grid / S_tot_tr
+
+cols_pred <- c("black", "darkgreen", "purple", "darkorange", "brown")
+matplot(0:23, as.matrix(frac_mat), type = "p", pch = 19,
+        col = cols_pred[1:best_H], ylim = c(0, 1),
+        xlab = "Hour of day",
+        ylab = "Fraction / predicted probability",
+        main = "Prediction exercise — train-fitted logit vs empirical fractions (full data)")
+matlines(hour_grid_p, P_grid, lty = 1, lwd = 2.5, col = cols_pred[1:best_H])
+legend("topright",
+       legend = c(paste("Component", 1:best_H),
+                  "Empirical fractions (full data)", "Logit (train fit only)"),
+       col = c(cols_pred[1:best_H], "gray40", "gray40"),
+       pch = c(rep(19, best_H), 19, NA),
+       lty = c(rep(NA,  best_H), NA,  1),
+       lwd = c(rep(NA,  best_H), NA,  2.5),
+       bty = "n", cex = 0.85)
+```
+
+### Interpretation of Out-of-Sample Performance
+
+A test set log-loss consistently below the baseline unequivocally
+confirms that `hour` is a genuinely informative covariate: knowing the
+time of day materially improves the prediction of the load-shape
+component compared to relying merely on unconditional class frequencies.
+Correspondingly, the accuracy gap over the baseline quantifies this
+practical gain in classification power.
+
+Visually, the final plot compares the probability curves estimated
+exclusively from the 80% training subset against the empirical fractions
+derived from the full dataset (Task 3). A close geometric agreement
+between the smooth predictions and the empirical points indicates that
+the learned periodic pattern is a robust structural feature of the
+data—not an artefact of the specific training observations—demonstrating
+that the logit model generalizes excellently to unseen hour-component
+pairs.
