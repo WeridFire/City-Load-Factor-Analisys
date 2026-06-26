@@ -11,18 +11,18 @@ library(coda)
 ```
 
 **Data.** Data file: `data/hourly_load_factor.csv` (2000 rows). The CSV
-analyzed is a derived, pre-cleaned version. For each (day, hour) of the
-year the hourly mean of the **city-wide** active power
+we share is a derived, pre-cleaned version. For each (day, hour) of the
+year we have computed the hourly mean of the **city-wide** active power
 $\overline{P}(d, h) = \mathrm{Zone1}(d, h) + \mathrm{Zone2}(d, h)
-+ \mathrm{Zone3}(d, h)$ has been computed from the original 10-min
-readings, and then the **hourly load factor**
++ \mathrm{Zone3}(d, h)$ from the original 10-min readings, and then the
+**hourly load factor**
 $$\mathrm{LF}(d, h) = \frac{\overline{P}(d, h)}{\max_{h'} \overline{P}(d, h')}\,,$$
 i.e. the ratio between the average load in hour $h$ and the highest
 hourly average of the same day. By construction $\mathrm{LF}(d, h)
 \in [0, 1]$: the day-peak hour gets exactly $1$ and the deepest off-peak
 hour gets the smallest value. From the full $365 \times 24 \approx 8700$
-(day, hour) cells a uniform random subsample of 2000 rows has been taken
-and the values clamped to $(10^{-3},\, 1 - 10^{-3})$ so that the Beta
+(day, hour) cells we have taken a uniform random subsample of 2000 rows
+and clamped the values to $(10^{-3},\, 1 - 10^{-3})$ so that the Beta
 log-density is finite at the boundary.
 
 Variables:
@@ -87,14 +87,14 @@ $$f(x; \boldsymbol{\pi}, \boldsymbol{\alpha}, \boldsymbol{\beta}) = \sum_{h=1}^H
 
 ### Constraints and Parameters
 
-- **Mixture Weights (**$\pi_h$): Represent the probability of a data
-  point belonging to component $h$. They must satisfy the following
-  conditions:
-  $$\sum_{h=1}^H \pi_h = 1 \quad \text{and} \quad \pi_h \ge 0 \quad \forall h \in \{1, \dots, H\}$$
-- **Shape Parameters (**$\alpha_h, \beta_h$): Govern the geometry of
-  each individual Beta density within the mixture. They must be strictly
-  positive:
-  $$\alpha_h > 0, \quad \beta_h > 0 \quad \forall h \in \{1, \dots, H\}$$
+-   **Mixture Weights (**$\pi_h$): Represent the probability of a data
+    point belonging to component $h$. They must satisfy the following
+    conditions:
+    $$\sum_{h=1}^H \pi_h = 1 \quad \text{and} \quad \pi_h \ge 0 \quad \forall h \in \{1, \dots, H\}$$
+-   **Shape Parameters (**$\alpha_h, \beta_h$): Govern the geometry of
+    each individual Beta density within the mixture. They must be
+    strictly positive:
+    $$\alpha_h > 0, \quad \beta_h > 0 \quad \forall h \in \{1, \dots, H\}$$
 
 ### Component Density Function
 
@@ -103,11 +103,7 @@ following PDF:
 
 $$\text{Beta}(x; \alpha_h, \beta_h) = \frac{1}{\text{B}(\alpha_h, \beta_h)} x^{\alpha_h - 1} (1 - x)^{\beta_h - 1}$$
 
-Where $\text{B}(\alpha_h, \beta_h)$ is the **Beta Function**, which acts
-as a normalizing constant and is defined using the Gamma function
-($\Gamma$):
-
-$$\text{B}(\alpha_h, \beta_h) = \frac{\Gamma(\alpha_h)\Gamma(\beta_h)}{\Gamma(\alpha_h + \beta_h)} = \int_{0}^{1} t^{\alpha_h - 1}(1 - t)^{\beta_h - 1} dt$$
+where ${\text{B}(\alpha_h, \beta_h)}$ is a normalizing constant.
 
 ## Model Selection via WAIC (Widely Applicable Information Criterion)
 
@@ -123,40 +119,14 @@ $$\text{WAIC} = -2 \cdot (\text{lppd} - p_{\text{WAIC}})$$
 
 Where:
 
-- $\text{lppd}$ is the **log pointwise predictive density**, which
-  measures how well the model fits the observed data.
-- $p_{\text{WAIC}}$ is the **effective number of parameters**, acting as
-  a penalty for model complexity to prevent overfitting.
-
-### 1. Log Pointwise Predictive Density (lppd)
-
-Given $n$ data points and $S$ posterior samples drawn from the MCMC
-chains, the $\text{lppd}$ is calculated by averaging the likelihood of
-each data point across all posterior samples, and then taking the log:
-
-$$\text{lppd} = \sum_{i=1}^n \ln \left( \frac{1}{S} \sum_{s=1}^S f(x_i; \boldsymbol{\theta}^s) \right)$$
-
-Where $f(x_i; \boldsymbol{\theta}^s)$ is the Beta Mixture density
-evaluated at data point $x_i$ using the parameters
-$\boldsymbol{\theta}^s = \{\boldsymbol{\pi}^s, \boldsymbol{\alpha}^s, \boldsymbol{\beta}^s\}$
-from the $s$-th posterior draw.
-
-### 2. Effective Number of Parameters ($p_{\text{WAIC}}$)
-
-The penalty term computes the posterior variance of the log-likelihood
-for each data point individually, summing them up. This captures how
-sensitive the model is to the posterior uncertainty:
-
-$$p_{\text{WAIC}} = \sum_{i=1}^n \mathcal{V}_{s=1}^S \Big( \ln f(x_i; \boldsymbol{\theta}^s) \Big)$$
-
-Where $\mathcal{V}_{s=1}^S$ denotes the sample variance over the $S$
-posterior simulations:
-
-$$\mathcal{V}_{s=1}^S \Big( \ln f(x_i; \boldsymbol{\theta}^s) \Big) = \frac{1}{S-1} \sum_{s=1}^S \left( \ln f(x_i; \boldsymbol{\theta}^s) - \frac{1}{S}\sum_{j=1}^S \ln f(x_i; \boldsymbol{\theta}^j) \right)^2$$
+-   $\text{lppd}$ is the **log pointwise predictive density**, which
+    measures how well the model fits the observed data.
+-   $p_{\text{WAIC}}$ is the **effective number of parameters**, acting
+    as a penalty for model complexity to prevent overfitting.
 
 ## JAGS Model
 
-### The Bayesian Formulation with Latent Variables (JAGS Approach)
+### Bayesian model and Data Augmentation
 
 In practice, we do not know which component generated which data point.
 To solve this in a Bayesian framework using JAGS, we introduce a
@@ -186,19 +156,20 @@ We define the model hierarchically as follows:
 To complete the Bayesian setup, we must specify prior distributions for
 all unknown parameters:
 
-- **For the weights (**$\boldsymbol{\pi}$): We use a symmetric
-  **Dirichlet distribution**, which is the natural conjugate prior for
-  categorical probabilities that must sum to 1:
-  $$\boldsymbol{\pi} \sim \text{Dirichlet}(\mathbf{1}_H)$$ Where
-  $\mathbf{1}_H = [1, 1, \dots, 1]$ of length $H$. This represents a
-  flat, uninformative uniform prior over the probability simplex.
+-   **For the weights (**$\boldsymbol{\pi}$): We use a symmetric
+    **Dirichlet distribution**, which is the natural conjugate prior for
+    categorical probabilities that must sum to 1:
+    $$\boldsymbol{\pi} \sim \text{Dirichlet}(\mathbf{1}_H)$$ Where
+    $\mathbf{1}_H = [1, 1, \dots, 1]$ of length $H$. This represents a
+    flat, uninformative uniform prior over the probability simplex.
 
-- **For the shape parameters (**$\alpha_h, \beta_h$): Since these
-  parameters must be strictly positive, we assign an **Exponential
-  distribution** with a small rate parameter $\lambda$:
-  $$\alpha_h \sim \text{Exponential}(\lambda), \quad \beta_h \sim \text{Exponential}(\lambda) \quad \forall h \in \{1, \dots, H\}$$
-  Setting $\lambda = 0.1$ ensures the prior is highly diffuse (weak),
-  allowing the data to fully drive the posterior estimation.
+-   **For the shape parameters (**$\alpha_h, \beta_h$): Since these
+    parameters must be strictly positive, we assign an **Exponential
+    distribution** with a small rate parameter $\lambda$:
+    $$\alpha_h \sim \text{Exponential}(\lambda), \quad \beta_h \sim \text{Exponential}(\lambda) \quad \forall h \in \{1, \dots, H\}$$
+    Setting $\lambda = 0.1$ ensures the prior is highly diffuse (weak),
+    allowing the data to fully drive the posterior estimation. (Later
+    will be verified through sensitivity analysis)
 
 ## Code
 
@@ -238,18 +209,18 @@ version for the remaining cases.
 The following code specifies the likelihood and priors so that JAGS can
 run MCMC simulations and estimate the posterior distribution.
 
-- The likelihood is a Beta mixture model.\
-  We introduce a latent categorical indicator $Z_i$ to assign each
-  observation $X_i$ to one of the $H$ components.
+-   The likelihood is a Beta mixture model.\
+    We introduce a latent categorical indicator $Z_i$ to assign each
+    observation $X_i$ to one of the $H$ components.
 
-- We assign weakly informative priors to all unknown parameters. In
-  particular, we place a symmetric Dirichlet prior on the mixture
-  weights $\boldsymbol{\pi}$ so that they sum to 1.
+-   We assign weakly informative priors to all unknown parameters. In
+    particular, we place a symmetric Dirichlet prior on the mixture
+    weights $\boldsymbol{\pi}$ so that they sum to 1.
 
-- For the shape parameters $\alpha_h$ and $\beta_h$, we use Exponential
-  priors with a small rate parameter ($\lambda = 0.1$). This keeps the
-  parameters strictly positive while leaving the prior diffuse and
-  weakly informative.
+-   For the shape parameters $\alpha_h$ and $\beta_h$, we use
+    Exponential priors with a small rate parameter ($\lambda = 0.1$).
+    This keeps the parameters strictly positive while leaving the prior
+    diffuse and weakly informative.
 
 ```{r}
 # Model with H=1
@@ -288,18 +259,16 @@ model {
 }"
 ```
 
-**Key point.** For a mixture model, WAIC must be computed from the
-**marginal** likelihood of each observation, integrating out the latent
-$z$:
-$$\log p(x_i \mid \theta^{(s)}) = \log \sum_{h=1}^H \pi_h^{(s)}\,\text{Beta}(x_i \mid \alpha_h^{(s)}, \beta_h^{(s)}).$$
-Using instead the log-density conditional on the sampled $z_i$
+For a mixture model, WAIC must be computed from the **marginal**
+likelihood of each observation, integrating out the latent $z$:
+$$\log p(x_i \mid \theta^{(s)}) = \log \sum_{h=1}^H \pi_h^{(s)}\,\text{Beta}(x_i \mid \alpha_h^{(s)}, \beta_h^{(s)}).$$Using
+instead the log-density conditional on the sampled $z_i$
 ($\log\text{Beta}(x_i\mid\alpha_{z_i},\beta_{z_i})$) answers a different
 predictive question, inflates $p_{\text{WAIC}}$, and tends to favour too
 many components. We compute `log_lik[i]` **inside JAGS** with the
-numerically stable log-sum-exp trick and monitor it; the helper here
-only reshapes the samples into the $[S \times N]$ form expected by
-`loo::waic`. As a further advantage, the marginal density is invariant
-to label permutations, so this WAIC is immune to label switching.
+numerically stable log-sum-exp trick and monitor it. As a further
+advantage, the marginal density is invariant to label permutations, so
+this WAIC is immune to label switching.
 
 ```{r}
 # Reshape MCMC log-likelihood array (chains x iterations x data_points) to matrix (samples x data_points)
@@ -338,19 +307,20 @@ Now it is time to fit the models.
 
 We use the following hyperparameters for the reasons below:
 
-- **n chains** = 2\
-  This choice helps reduce the risk that the Markov chains become
-  trapped near a local mode, which could lead to biased estimates. Using
-  two JAGS chains with different initial values increases the chance of
-  obtaining a more reliable exploration of the posterior distribution.
-  In a final analysis, we would ideally use 3 or 4 chains.
+-   **n chains** = 2\
+    This choice helps reduce the risk that the Markov chains become
+    trapped near a local mode, which could lead to biased estimates.
+    Using two JAGS chains with different initial values increases the
+    chance of obtaining a more reliable exploration of the posterior
+    distribution. In a final analysis, we would ideally use 3 or 4
+    chains.
 
-- **Burn-in** = 1000\
-  This is a standard burn-in period, used to allow the chains to move
-  away from their initial values before samples are retained for
-  inference.
+-   **Burn-in** = 1000\
+    This is a standard burn-in period, used to allow the chains to move
+    away from their initial values before samples are retained for
+    inference.
 
-- **Iterations** = 2000
+-   **Iterations** = 2000
 
 $H = 1$
 
@@ -430,15 +400,15 @@ waic_H5 <- compute_waic_from_loglik(samples_H5$log_lik)
 cat("WAIC for H = 5:", waic_H5, "\n")
 ```
 
-**Reading the WAIC, not just its minimum.** A single WAIC value hides
-its sampling uncertainty: each model has a standard error (SE), and two
-models whose WAIC differ by less than roughly $1$-$2$ SE are
-statistically indistinguishable. We therefore report the full table with
-`ELPD`, the effective number of parameters `p_eff` ($= p_{\text{WAIC}}$,
-the complexity penalty), `WAIC`, and its `SE`, and we run `loo_compare`,
-which ranks the models and gives the pairwise `elpd_diff` together with
-its `se_diff`. When several $H$ values are tied within the noise, the
-**most parsimonious** among them is preferable to the bare `which.min`.
+A single WAIC value hides its sampling uncertainty: each model has a
+standard error (SE), and two models whose WAIC differ by less than
+roughly $1$-$2$ SE are statistically indistinguishable. We therefore
+report the full table with `ELPD`, the effective number of parameters
+`p_eff` ($= p_{\text{WAIC}}$, the complexity penalty), `WAIC`, and its
+`SE`, and we run `loo_compare`, which ranks the models and gives the
+pairwise `elpd_diff` together with its `se_diff`. When several $H$
+values are tied within the noise, the **most parsimonious** among them
+is preferable to the bare `which.min`.
 
 ```{r}
 # Compute WAIC estimates for models with varying number of components (H)
@@ -455,10 +425,10 @@ waic_se         <- sapply(waic_objs, function(w) w$estimates["waic", "SE"])
 
 # Generate and display the model comparison table
 waic_table <- do.call(rbind, Map(ic_row, waic_objs, names(waic_objs)))
-cat("--- MODEL SELECTION: WAIC with standard errors ---\n")
+cat("MODEL SELECTION: WAIC with standard errors\n")
 print(waic_table, row.names = FALSE)
 
-cat("\n--- loo_compare (differences vs the best model) ---\n")
+cat("\nloo_compare (differences vs the best model)\n")
 print(loo_compare(waic_objs))
 
 # Identify the absolute minimum and the parsimonious optimal model
@@ -466,15 +436,13 @@ lowest_H <- which.min(all_waic_values)
 chosen_H <- select_parsimonious(all_waic_values, waic_se, complexity = 1:5)
 cat("\n Lowest-WAIC model: H =", lowest_H, "components\n")
 cat("Parsimonious choice (within 1 SE): H =", chosen_H, "components\n")
-cat("    (models within 1 SE of the lowest WAIC are statistically tied;\n",
-    "     we keep the simplest among them rather than the bare which.min.)\n")
 ```
 
 ## Now visualise the results
 
-To visually reinforce this selection process, we plot the WAIC scores
-across all models alongside their $\pm 1$ SE bounds, highlighting both
-the absolute minimum and the parsimonious choice.
+We plot the WAIC scores across all models alongside their $\pm 1$ SE
+bounds, highlighting both the absolute minimum and the parsimonious
+choice.
 
 ```{r}
 # Define dynamic y-axis limits incorporating standard errors
@@ -617,11 +585,14 @@ if (best_H > 1) {
 }
 ```
 
-## MCMC Diagnostics: The Label Switching Problem
+[CLAUDE: write this paragraph better] The previous graphs suck nonstante
+è selezionato come il migliore, write because could be label switch
+
+## MCMC Diagnostics
 
 In a mixture model the $H$ components are **exchangeable**: permuting
 their labels leaves the joint likelihood unchanged, so the posterior has
-up to $H!$ equivalent modes — one for each relabelling of the same
+up to $H!$ equivalent modes, one for each relabelling of the same
 solution. When two MCMC chains independently explore different
 permutations, the raw parameter traces cross and swap between
 iterations, a phenomenon known as **label switching**. Naively averaging
@@ -712,11 +683,10 @@ for (h in 1:best_H) {
 par(mfrow = c(1, 1))
 ```
 
-Now we calculate $\hat{R}$ :
+Now we calculate Gelman-Rubin coefficient, $\hat{R}$ :
 
 ```{r}
 
-# Compute Gelman-Rubin convergence diagnostic (R-hat) across MCMC chains
 calculate_rhat_table <- function(alpha_array, beta_array, pi_array, best_H, n_chains) {
   
   # Vectors to store the point estimates
@@ -733,7 +703,7 @@ calculate_rhat_table <- function(alpha_array, beta_array, pi_array, best_H, n_ch
     gr_alpha <- gelman.diag(as.mcmc.list(chain_list_alpha), autoburnin = FALSE)
     rhat_alpha[h] <- gr_alpha$psrf[1, 1] # Extract Point Estimate
     
-    # Gelman-Rubin Diagnostic for Beta
+    # For Beta
     chain_list_beta <- list()
     for (c in 1:n_chains) {
       chain_list_beta[[c]] <- mcmc(beta_array[h, , c])
@@ -741,7 +711,7 @@ calculate_rhat_table <- function(alpha_array, beta_array, pi_array, best_H, n_ch
     gr_beta <- gelman.diag(as.mcmc.list(chain_list_beta), autoburnin = FALSE)
     rhat_beta[h] <- gr_beta$psrf[1, 1] # Extract Point Estimate
     
-    # Gelman-Rubin Diagnostic for Pi (Weights)
+    # For Pi
     chain_list_pi <- list()
     for (c in 1:n_chains) {
       chain_list_pi[[c]] <- mcmc(pi_array[h, , c])
@@ -778,11 +748,15 @@ The traces show the characteristic label-switching signature: chains
 running on separate tracks that occasionally cross, and multimodal
 marginal densities for each raw component parameter. The $\hat{R}$
 values in the table above, several of which exceed the conventional 1.10
-threshold, formally confirm this instability. At this point two
-explanations are possible: the chains genuinely failed to mix and
-explore the posterior, or the high $\hat{R}$ is a statistical artifact
-caused by the chains sampling from different, but equivalent, label
-permutations of a well-mixed sampler.
+threshold, formally confirm this instability.
+
+At this point two explanations are possible:
+
+-   the chains genuinely failed to mix and explore the posterior
+
+-   the high $\hat{R}$ is a statistical artifact caused by the chains
+    sampling from different, but equivalent, label permutations of a
+    well-mixed sampler.
 
 To distinguish between the two explanations, we evaluate $\hat{R}$ and
 the Effective Sample Size (ESS) on the **marginal log-likelihood**
@@ -825,6 +799,8 @@ The table above shows $\hat{R} \approx 1$ and a healthy ESS, confirming
 that the sampler has reached global convergence. The instability in the
 raw component parameters is therefore purely an artifact of the chains
 sampling from different label permutations of the same posterior mode.
+
+## **Post-hoc re-labelling**
 
 To restore parameter identifiability for reporting, we apply a
 **post-hoc re-labelling**: at each MCMC draw we sort the $H$ components
@@ -911,12 +887,13 @@ legend("topright",
 Having resolved the label-switching ambiguity, we can now safely extract
 meaningful posterior summaries for each individual component. The final
 step is to isolate these latent Beta distributions to examine their
-specific profiles and parameter uncertainties. Below, we visualize each
-sorted component independently, alongside its expected weight, shape
-parameters ($\alpha$, $\beta$), and theoretical mean. Furthermore, we
-compute the 95% equal-tailed credible intervals for the parameters,
-providing a rigorous quantification of the posterior uncertainty for
-each identified cluster within the data.
+specific profiles and parameter uncertainties.
+
+Below, we visualize each sorted component independently, alongside its
+expected weight, shape parameters ($\alpha$, $\beta$), and theoretical
+mean. Furthermore, we compute the 95% equal-tailed **credible
+intervals** for the parameters, providing a rigorous quantification of
+the posterior uncertainty for each identified cluster within the data.
 
 ```{r}
 best_samples <- all_samples[[best_H]]
@@ -1115,15 +1092,9 @@ legend("topright",
        bty = "n", cex = 0.8)
 ```
 
-**Interpretation of Sensitivity Results** If the four predictive curves
-largely overlap, it indicates that the mixture shape is robust and
-insensitive to the chosen priors, confirming that the data are strongly
-driving the inference. Conversely, a curve that departs significantly
-from the reference identifies a prior that is restrictive
-enough—relative to the sample size—to pull the posterior away from the
-likelihood. Finally, examining the WAIC differences across these
-settings reveals whether the prior selection materially affects the
-out-of-sample predictive accuracy.
+The four predictive curves largely overlap, it indicates that the
+mixture shape is robust and insensitive to the chosen priors, confirming
+that the data are strongly driving the inference.
 
 # Task 2
 
@@ -1143,7 +1114,7 @@ $$p(\tilde x \mid \text{data})
 We average the **densities**, not the parameters. This way the curve
 accounts for posterior uncertainty. A useful side effect: because each
 draw contributes its *whole* mixture (the inner sum over $h$),
-relabelling the components of any given draw leaves that sum unchanged —
+relabelling the components of any given draw leaves that sum unchanged,
 the result is automatically **invariant to label switching**, with no
 need for any reordering trick.
 
