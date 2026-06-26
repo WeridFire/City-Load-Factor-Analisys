@@ -14,15 +14,15 @@ library(coda)
 analyzed is a derived, pre-cleaned version. For each (day, hour) of the
 year the hourly mean of the **city-wide** active power
 $\overline{P}(d, h) = \mathrm{Zone1}(d, h) + \mathrm{Zone2}(d, h)
-+ \mathrm{Zone3}(d, h)$ has been computed from the original 10-min readings, and then the
-**hourly load factor**
++ \mathrm{Zone3}(d, h)$ has been computed from the original 10-min
+readings, and then the **hourly load factor**
 $$\mathrm{LF}(d, h) = \frac{\overline{P}(d, h)}{\max_{h'} \overline{P}(d, h')}\,,$$
 i.e. the ratio between the average load in hour $h$ and the highest
 hourly average of the same day. By construction $\mathrm{LF}(d, h)
 \in [0, 1]$: the day-peak hour gets exactly $1$ and the deepest off-peak
 hour gets the smallest value. From the full $365 \times 24 \approx 8700$
-(day, hour) cells a uniform random subsample of 2000 rows
-has been taken and the values clamped to $(10^{-3},\, 1 - 10^{-3})$ so that the Beta
+(day, hour) cells a uniform random subsample of 2000 rows has been taken
+and the values clamped to $(10^{-3},\, 1 - 10^{-3})$ so that the Beta
 log-density is finite at the boundary.
 
 Variables:
@@ -121,9 +121,11 @@ WAIC is defined as:
 
 $$\text{WAIC} = -2 \cdot (\text{lppd} - p_{\text{WAIC}})$$
 
-Where: \* $\text{lppd}$ is the **log pointwise predictive density**,
-which measures how well the model fits the observed data. \*
-$p_{\text{WAIC}}$ is the **effective number of parameters**, acting as a
+Where:
+
+* $\text{lppd}$ is the **log pointwise predictive density**,
+which measures how well the model fits the observed data.
+* $p_{\text{WAIC}}$ is the **effective number of parameters**, acting as a
 penalty for model complexity to prevent overfitting.
 
 ### 1. Log Pointwise Predictive Density (lppd)
