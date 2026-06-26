@@ -1,0 +1,41 @@
+\documentclass{article}
+
+\usepackage{graphicx}
+\renewcommand{\thesubsection}{\Alph{subsection}}
+\renewcommand{\thesubsubsection}{\thesubsection.\arabic{subsubsection}}
+\usepackage{listings} % Mantenuto questo, rimosso 'listing' che creava conflitto
+\usepackage{pdfpages}
+\usepackage{pdflscape}
+\usepackage{tabularx}
+\usepackage{titlesec}
+
+\title{\textbf{RASD: BBP}}
+
+\begin{document}
+
+\begin{titlepage}
+    \centering
+    {\scshape\large AY 2025/2026 \par}
+    \vfill
+    \includegraphics[width=100pt]{img/logo-polimi.pdf}\par\vspace{1cm}
+    {\scshape\LARGE Politecnico di Milano \par}
+    \vspace{1.5cm}
+    {\huge\bfseries City Load Factor\par}
+    \vspace{2cm}
+    {\large Filippo Maretti\quad Davide Martini\par Manuel Maiuolo\quad Adriano Mangoni}
+    \vfill
+    {\large Professor\par
+        Matteo Giovanni Rossi\par}
+    \vfill
+\end{titlepage}
+
+\clearpage
+\pagenumbering{gobble} % Nasconde il numero di pagina nell'indice (opzionale)
+\tableofcontents
+\clearpage
+\pagenumbering{arabic} % Fa partire il conteggio in arabo da 1 dopo l'indice
+
+\section{Introduzione}
+Il documento inizia qui...
+
+\end{document}
