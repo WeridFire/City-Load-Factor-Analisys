@@ -123,10 +123,10 @@ $$\text{WAIC} = -2 \cdot (\text{lppd} - p_{\text{WAIC}})$$
 
 Where:
 
-* $\text{lppd}$ is the **log pointwise predictive density**,
-which measures how well the model fits the observed data.
-* $p_{\text{WAIC}}$ is the **effective number of parameters**, acting as a
-penalty for model complexity to prevent overfitting.
+- $\text{lppd}$ is the **log pointwise predictive density**, which
+  measures how well the model fits the observed data.
+- $p_{\text{WAIC}}$ is the **effective number of parameters**, acting as
+  a penalty for model complexity to prevent overfitting.
 
 ### 1. Log Pointwise Predictive Density (lppd)
 
@@ -200,7 +200,7 @@ all unknown parameters:
   Setting $\lambda = 0.1$ ensures the prior is highly diffuse (weak),
   allowing the data to fully drive the posterior estimation.
 
-## CODE
+## Code
 
 We import the data. For the final run we use all 2000 observations; for
 quick tests, set `use_subsample <- TRUE` to keep the runtime short. We
