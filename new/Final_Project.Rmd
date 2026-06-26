@@ -11,18 +11,18 @@ library(coda)
 ```
 
 **Data.** Data file: `data/hourly_load_factor.csv` (2000 rows). The CSV
-we share is a derived, pre-cleaned version. For each (day, hour) of the
-year we have computed the hourly mean of the **city-wide** active power
+analyzed is a derived, pre-cleaned version. For each (day, hour) of the
+year the hourly mean of the **city-wide** active power
 $\overline{P}(d, h) = \mathrm{Zone1}(d, h) + \mathrm{Zone2}(d, h)
-+ \mathrm{Zone3}(d, h)$ from the original 10-min readings, and then the
++ \mathrm{Zone3}(d, h)$ has been computed from the original 10-min readings, and then the
 **hourly load factor**
 $$\mathrm{LF}(d, h) = \frac{\overline{P}(d, h)}{\max_{h'} \overline{P}(d, h')}\,,$$
 i.e. the ratio between the average load in hour $h$ and the highest
 hourly average of the same day. By construction $\mathrm{LF}(d, h)
 \in [0, 1]$: the day-peak hour gets exactly $1$ and the deepest off-peak
 hour gets the smallest value. From the full $365 \times 24 \approx 8700$
-(day, hour) cells we have taken a uniform random subsample of 2000 rows
-and clamped the values to $(10^{-3},\, 1 - 10^{-3})$ so that the Beta
+(day, hour) cells a uniform random subsample of 2000 rows
+has been taken and the values clamped to $(10^{-3},\, 1 - 10^{-3})$ so that the Beta
 log-density is finite at the boundary.
 
 Variables:
@@ -87,14 +87,14 @@ $$f(x; \boldsymbol{\pi}, \boldsymbol{\alpha}, \boldsymbol{\beta}) = \sum_{h=1}^H
 
 ### Constraints and Parameters
 
--   **Mixture Weights (**$\pi_h$): Represent the probability of a data
-    point belonging to component $h$. They must satisfy the following
-    conditions:
-    $$\sum_{h=1}^H \pi_h = 1 \quad \text{and} \quad \pi_h \ge 0 \quad \forall h \in \{1, \dots, H\}$$
--   **Shape Parameters (**$\alpha_h, \beta_h$): Govern the geometry of
-    each individual Beta density within the mixture. They must be
-    strictly positive:
-    $$\alpha_h > 0, \quad \beta_h > 0 \quad \forall h \in \{1, \dots, H\}$$
+- **Mixture Weights (**$\pi_h$): Represent the probability of a data
+  point belonging to component $h$. They must satisfy the following
+  conditions:
+  $$\sum_{h=1}^H \pi_h = 1 \quad \text{and} \quad \pi_h \ge 0 \quad \forall h \in \{1, \dots, H\}$$
+- **Shape Parameters (**$\alpha_h, \beta_h$): Govern the geometry of
+  each individual Beta density within the mixture. They must be strictly
+  positive:
+  $$\alpha_h > 0, \quad \beta_h > 0 \quad \forall h \in \{1, \dots, H\}$$
 
 ### Component Density Function
 
@@ -184,19 +184,19 @@ We define the model hierarchically as follows:
 To complete the Bayesian setup, we must specify prior distributions for
 all unknown parameters:
 
--   **For the weights (**$\boldsymbol{\pi}$): We use a symmetric
-    **Dirichlet distribution**, which is the natural conjugate prior for
-    categorical probabilities that must sum to 1:
-    $$\boldsymbol{\pi} \sim \text{Dirichlet}(\mathbf{1}_H)$$ Where
-    $\mathbf{1}_H = [1, 1, \dots, 1]$ of length $H$. This represents a
-    flat, uninformative uniform prior over the probability simplex.
+- **For the weights (**$\boldsymbol{\pi}$): We use a symmetric
+  **Dirichlet distribution**, which is the natural conjugate prior for
+  categorical probabilities that must sum to 1:
+  $$\boldsymbol{\pi} \sim \text{Dirichlet}(\mathbf{1}_H)$$ Where
+  $\mathbf{1}_H = [1, 1, \dots, 1]$ of length $H$. This represents a
+  flat, uninformative uniform prior over the probability simplex.
 
--   **For the shape parameters (**$\alpha_h, \beta_h$): Since these
-    parameters must be strictly positive, we assign an **Exponential
-    distribution** with a small rate parameter $\lambda$:
-    $$\alpha_h \sim \text{Exponential}(\lambda), \quad \beta_h \sim \text{Exponential}(\lambda) \quad \forall h \in \{1, \dots, H\}$$
-    Setting $\lambda = 0.1$ ensures the prior is highly diffuse (weak),
-    allowing the data to fully drive the posterior estimation.
+- **For the shape parameters (**$\alpha_h, \beta_h$): Since these
+  parameters must be strictly positive, we assign an **Exponential
+  distribution** with a small rate parameter $\lambda$:
+  $$\alpha_h \sim \text{Exponential}(\lambda), \quad \beta_h \sim \text{Exponential}(\lambda) \quad \forall h \in \{1, \dots, H\}$$
+  Setting $\lambda = 0.1$ ensures the prior is highly diffuse (weak),
+  allowing the data to fully drive the posterior estimation.
 
 ## CODE
 
@@ -236,18 +236,18 @@ version for the remaining cases.
 The following code specifies the likelihood and priors so that JAGS can
 run MCMC simulations and estimate the posterior distribution.
 
--   The likelihood is a Beta mixture model.\
-    We introduce a latent categorical indicator $Z_i$ to assign each
-    observation $X_i$ to one of the $H$ components.
+- The likelihood is a Beta mixture model.\
+  We introduce a latent categorical indicator $Z_i$ to assign each
+  observation $X_i$ to one of the $H$ components.
 
--   We assign weakly informative priors to all unknown parameters. In
-    particular, we place a symmetric Dirichlet prior on the mixture
-    weights $\boldsymbol{\pi}$ so that they sum to 1.
+- We assign weakly informative priors to all unknown parameters. In
+  particular, we place a symmetric Dirichlet prior on the mixture
+  weights $\boldsymbol{\pi}$ so that they sum to 1.
 
--   For the shape parameters $\alpha_h$ and $\beta_h$, we use
-    Exponential priors with a small rate parameter ($\lambda = 0.1$).
-    This keeps the parameters strictly positive while leaving the prior
-    diffuse and weakly informative.
+- For the shape parameters $\alpha_h$ and $\beta_h$, we use Exponential
+  priors with a small rate parameter ($\lambda = 0.1$). This keeps the
+  parameters strictly positive while leaving the prior diffuse and
+  weakly informative.
 
 ```{r}
 # Model with H=1
@@ -336,20 +336,19 @@ Now it is time to fit the models.
 
 We use the following hyperparameters for the reasons below:
 
--   **n chains** = 2\
-    This choice helps reduce the risk that the Markov chains become
-    trapped near a local mode, which could lead to biased estimates.
-    Using two JAGS chains with different initial values increases the
-    chance of obtaining a more reliable exploration of the posterior
-    distribution. In a final analysis, we would ideally use 3 or 4
-    chains.
+- **n chains** = 2\
+  This choice helps reduce the risk that the Markov chains become
+  trapped near a local mode, which could lead to biased estimates. Using
+  two JAGS chains with different initial values increases the chance of
+  obtaining a more reliable exploration of the posterior distribution.
+  In a final analysis, we would ideally use 3 or 4 chains.
 
--   **Burn-in** = 1000\
-    This is a standard burn-in period, used to allow the chains to move
-    away from their initial values before samples are retained for
-    inference.
+- **Burn-in** = 1000\
+  This is a standard burn-in period, used to allow the chains to move
+  away from their initial values before samples are retained for
+  inference.
 
--   **Iterations** = 2000
+- **Iterations** = 2000
 
 $H = 1$
 
@@ -1114,15 +1113,15 @@ legend("topright",
        bty = "n", cex = 0.8)
 ```
 
-**Interpretation of Sensitivity Results**
-If the four predictive curves largely overlap, it indicates that the
-mixture shape is robust and insensitive to the chosen priors, confirming
-that the data are strongly driving the inference. Conversely, a curve
-that departs significantly from the reference identifies a prior that is
-restrictive enough—relative to the sample size—to pull the posterior
-away from the likelihood. Finally, examining the WAIC differences across
-these settings reveals whether the prior selection materially affects
-the out-of-sample predictive accuracy.
+**Interpretation of Sensitivity Results** If the four predictive curves
+largely overlap, it indicates that the mixture shape is robust and
+insensitive to the chosen priors, confirming that the data are strongly
+driving the inference. Conversely, a curve that departs significantly
+from the reference identifies a prior that is restrictive
+enough—relative to the sample size—to pull the posterior away from the
+likelihood. Finally, examining the WAIC differences across these
+settings reveals whether the prior selection materially affects the
+out-of-sample predictive accuracy.
 
 # Task 2
 
@@ -1300,17 +1299,17 @@ legend("topleft", legend = paste("Component", 1:best_H),
        col = cols[1:best_H], pch = 19, bty = "n", cex = 0.9)
 ```
 
-**Posterior Predictive Checking and Mode Recovery**
-The posterior predictive curve (blue) represents the expected Bayesian
-predictive density for a new observation given the observed data. To
-visually evaluate the model's goodness-of-fit, we examine the local
-maxima of this density, marked by the red dashed lines. If these
-theoretical peaks accurately align with the visible modes of the
-empirical histogram, it confirms that the model has successfully
-recovered the underlying structure of the data. Crucially, by selecting
-an optimal complexity of $H > 1$, the mixture framework flexibily
-reproduces a multi-modal profile that a single Beta distribution is
-fundamentally incapable of capturing.
+**Posterior Predictive Checking and Mode Recovery** The posterior
+predictive curve (blue) represents the expected Bayesian predictive
+density for a new observation given the observed data. To visually
+evaluate the model's goodness-of-fit, we examine the local maxima of
+this density, marked by the red dashed lines. If these theoretical peaks
+accurately align with the visible modes of the empirical histogram, it
+confirms that the model has successfully recovered the underlying
+structure of the data. Crucially, by selecting an optimal complexity of
+$H > 1$, the mixture framework flexibily reproduces a multi-modal
+profile that a single Beta distribution is fundamentally incapable of
+capturing.
 
 # Task 4
 
