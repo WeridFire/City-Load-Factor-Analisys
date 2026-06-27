@@ -202,7 +202,7 @@ fourier_design <- function(h_vec, K) {
        C = matrix(sapply(1:K, function(k) cos(2 * pi * k * h_vec / 24)), nrow = n))
 }
 
-use_subsample <- TRUE
+use_subsample <- FALSE
 n_sub <- 400
 
 # Subsampling for computational efficiency
