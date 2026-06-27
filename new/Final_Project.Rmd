@@ -1049,7 +1049,7 @@ for (j in seq_along(sens_settings)) {
         lty  = sens_ltys[j])
 }
 
-legend("topright",
+legend("topleft",
        legend = sapply(sens_settings, `[[`, "label"),
        col = sens_cols, lwd = sens_lwds, lty = sens_ltys,
        bty = "n", cex = 0.8)
@@ -1582,11 +1582,11 @@ matplot(0:23, as.matrix(frac_mat), type = "p", pch = 19,
         col = COMPONENT_COLS[1:best_H], ylim = c(0, 1),
         xlab = "Hour of day",
         ylab = "Fraction / predicted probability",
-        main = "Train-fitted logit vs. empirical fractions (full data)")
+        main = "Train-fitted logit vs. empirical fractions")
 matlines(hour_grid_p, P_grid, lty = 1, lwd = 2.5, col = COMPONENT_COLS[1:best_H])
 legend("topright",
        legend = c(paste("Component", 1:best_H),
-                  "Empirical fractions (full data)", "Logit (train fit only)"),
+                  "Empirical fractions", "Logit"),
        col = c(COMPONENT_COLS[1:best_H], "gray40", "gray40"),
        pch = c(rep(19, best_H), 19, NA),
        lty = c(rep(NA,  best_H), NA,  1),
