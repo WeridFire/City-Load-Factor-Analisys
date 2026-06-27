@@ -182,7 +182,7 @@ because it will be used for clustering.
 set.seed(123)
 
 # MCMC configuration 
-N_CHAINS  <- 2
+N_CHAINS  <- 4
 N_BURNIN  <- 1000
 N_SAMPLES <- 2000
 
