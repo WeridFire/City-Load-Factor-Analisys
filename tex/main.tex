@@ -248,21 +248,20 @@ parsimonious.
 \label{tab:waic}
 \begin{tabular}{lrrrr@{\hskip 2.2em}rr}
 \toprule
-Model & ELPD & p\_eff & WAIC & SE & $\Delta$elpd & se\_diff\\
+Model & WAIC & SE \\
 \midrule
-$H=1$ & 817.1 & 2.8 & $-1634.1$ & 31.9 & $-745.1$ & 32.5\\
-$H=2$ & 1344.7 & 3.9 & $-2689.4$ & 52.0 & $-217.5$ & 18.6\\
-$H=\mathbf{3}$ & \textbf{1550.4} & 6.4 & $\mathbf{-3100.9}$ & 60.7 & $-11.8$ & 4.0\\
-$H=4$ & 1560.3 & 9.5 & $-3120.7$ & 60.9 & $-1.9$ & 0.5\\
-$H=5$ & 1562.2 & 9.1 & $-3124.4$ & 61.4 & 0.0 & 0.0\\
+$H=1$  & $-1634.1$ & 31.9 \\
+$H=2$  & $-2689.4$ & 52.0\\
+$H=\mathbf{3}$  & $\mathbf{-3100.9}$ & 60.7 \\
+$H=4$  & $-3120.7$ & 60.9 \\
+$H=5$ & $-3124.4$ & 61.4\\
 \bottomrule
 \end{tabular}
 \end{table}
 
-WAIC drops sharply from $H=1$ to $H=3$ (an ELPD gain of about $1390$) and
+WAIC drops sharply from $H=1$ to $H=3$ and
 then nearly flattens. The bare minimum is at $H=5$, and the pairwise test is
-sensitive enough to register the residual gains as real
-($\Delta\mathrm{elpd}=-11.8\pm4.0$ for $H=3$ versus $H=5$), so $H=5$ is, in
+sensitive enough to register the residual gains as real, so $H=5$ is, in
 strict predictive terms, marginally the best. These gains are nevertheless
 tiny: the WAIC spread across $H=3,4,5$ is only about $24$ against a per-model
 SE of $\sim\!60$, so all three sit within one standard error of the minimum.
@@ -360,7 +359,7 @@ visible peaks of the empirical distribution. The $H=\bestH$ mixture thus reprodu
 multimodal profile that a single Beta is structurally unable to capture.
 
 
-\begin{figure}
+\begin{figure}[H]
 \centering
 \fig[0.7\linewidth]{04_ppd_modes.png}
 \caption{Posterior predictive density of the selected $H=\bestH$ model
@@ -481,8 +480,7 @@ the time of day.
 \fig[0.75\linewidth]{07_predictedVSempirical.png}
 \caption{Multinomial logit ($K=\bestK$): predicted $P(\text{component}\mid
 \text{hour})$ (curves) overlaid on the empirical fractions of
-Figure~\ref{fig:byhour} (points). The smooth periodic model reproduces the
-empirical pattern.}
+Figure~\ref{fig:byhour_affiancate} (points).}
 \label{fig:task4}
 \end{figure}
 
@@ -602,13 +600,13 @@ $\mathrm{SE}\approx 56$), so the parsimonious choice is $K=\bestK$.
 \label{tab:waicK}
 \begin{tabular}{lrrrr@{\hskip 2.2em}rr}
 \toprule
-Model & ELPD & p\_eff & WAIC & SE & $\Delta$elpd & se\_diff\\
+Model  & WAIC & SE \\
 \midrule
-$K=1$ & $-678.0$ & 9.5 & 1356.1 & 80.7 & $-162.1$ & 23.5\\
-$K=2$ & $-608.2$ & 14.4 & 1216.4 & 71.2 & $-92.3$ & 16.6\\
-$K=\mathbf{3}$ & $\mathbf{-535.9}$ & 13.8 & $\mathbf{1071.8}$ & 57.8 & $-20.0$ & 6.9\\
-$K=4$ & $-516.1$ & 16.4 & 1032.2 & 54.9 & $-0.2$ & 2.8\\
-$K=5$ & $-515.9$ & 18.8 & 1031.8 & 55.7 & 0.0 & 0.0\\
+$K=1$  & 1356.1 & 80.7 \\
+$K=2$  & 1216.4 & 71.2 \\
+$K=\mathbf{3}$  & $\mathbf{1071.8}$ & 57.8 \\
+$K=4$  & 1032.2 & 54.9 \\
+$K=5$  & 1031.8 & 55.7 \\
 \bottomrule
 \end{tabular}
 \end{table}
