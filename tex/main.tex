@@ -337,7 +337,7 @@ for all shape parameters, confirming that each regime is well identified.
 
 \begin{figure}[H]
 \centering
-\fig[0.7\linewidth]{03_anatomy.png}
+\fig[0.65\linewidth]{03_anatomy.png}
 \caption{Mixture anatomy}
 \label{fig:anatomy}
 \end{figure}
@@ -361,7 +361,7 @@ multimodal profile that a single Beta is structurally unable to capture.
 
 \begin{figure}[H]
 \centering
-\fig[0.7\linewidth]{04_ppd_modes.png}
+\fig[0.65\linewidth]{04_ppd_modes.png}
 \caption{Posterior predictive density of the selected $H=\bestH$ model
 against the empirical histogram.}
 \label{fig:ppd}
@@ -483,6 +483,7 @@ the time of day.
 Figure~\ref{fig:byhour_affiancate} (points).}
 \label{fig:task4}
 \end{figure}
+\newpage
 
 % ==================================================================
 \section{Prediction exercise (out-of-sample)}
@@ -548,6 +549,7 @@ $n=\Nfull$ sample with $\nchains$ chains and $\niter$ retained iterations per
 chain; a still longer run would only sharpen the credible intervals without
 changing the qualitative conclusions.
 
+\newpage
 % ==================================================================
 \appendix
 \section{MCMC diagnostics and supplementary results}
@@ -566,8 +568,7 @@ the high raw $\widehat R$ is a labelling artefact, not a mixing failure.
 \begin{table}[H]
 \centering
 \caption{Raw (label-affected) Gelman--Rubin $\widehat R$ for the $H=\bestH$
-component parameters. Values above $1.10$ reflect label switching, not
-non-convergence (cf.\ the invariant-scale $\widehat R=\rhatlik$).}
+component parameters.}
 \label{tab:rhat}
 \begin{tabular}{lc@{\hskip 2em}lc@{\hskip 2em}lc}
 \toprule
@@ -582,7 +583,7 @@ $\alpha_3$ & 8.30 & $\beta_3$ & 1.17 & $\pi_3$ & 1.02\\
 
 \begin{figure}[H]
 \centering
-\fig[0.85\linewidth]{08_labelSwitchingTraces.png}
+\fig[0.7\linewidth]{08_labelSwitchingTraces.png}
 \caption{Trace plots (and marginal densities) for the $H=\bestH$ component
 parameters, showing the label-switching signature.}
 \label{fig:trace}
