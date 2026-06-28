@@ -443,7 +443,7 @@ to real operating regimes rather than statistical artefacts.
 \section{Predicting the load regime from the hour: multinomial logit}
 % ==================================================================
 
-We now turn the relationship around and ask \emph{how predictable the
+We now ask \emph{how predictable the
 regime is from the time of day}, treating the MAP label $\hat z_i$ as the
 response of a supervised model whose only covariate is \texttt{hour}.
 Because \texttt{hour} is cyclic ($23$ is adjacent to $0$), we expand it on a
@@ -470,16 +470,15 @@ of the minimum, so we adopt the parsimonious $K=\bestK$
 
 The predicted probability curves (Figure~\ref{fig:task4}) closely track the
 empirical fractions of the previous section: both estimate the same quantity
-$P(\text{component}\mid\text{hour})$, but the logit borrows strength across
-adjacent hours through the Fourier basis and yields a smooth, strictly
-periodic profile, whereas the empirical fractions are noisier at hours with
+$P(\text{component}\mid\text{hour})$, but the logit takes into account 
+adjacent hours through the Fourier basis and yields a smooth periodic profile, whereas the empirical fractions are noisier at hours with
 few sampled observations. The agreement confirms that the latent load
 regimes are, to a good approximation, a deterministic periodic function of
 the time of day.
 
 \begin{figure}[H]
 \centering
-\fig[0.75\linewidth]{07_task4.png}
+\fig[0.75\linewidth]{07_predictedVSempirical.png}
 \caption{Multinomial logit ($K=\bestK$): predicted $P(\text{component}\mid
 \text{hour})$ (curves) overlaid on the empirical fractions of
 Figure~\ref{fig:byhour} (points). The smooth periodic model reproduces the
@@ -585,7 +584,7 @@ $\alpha_3$ & 8.30 & $\beta_3$ & 1.17 & $\pi_3$ & 1.02\\
 
 \begin{figure}[H]
 \centering
-\fig[0.85\linewidth]{A1_traces.png}
+\fig[0.85\linewidth]{08_labelSwitchingTraces.png}
 \caption{Trace plots (and marginal densities) for the $H=\bestH$ component
 parameters, showing the label-switching signature.}
 \label{fig:trace}
