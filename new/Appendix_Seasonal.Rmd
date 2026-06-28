@@ -1,0 +1,260 @@
+---
+title: "Appendix: Seasonal variation of the latent load regimes"
+output: html_document
+editor_options:
+  markdown:
+    wrap: 72
+---
+
+```{r setup-appendix, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE,
+                      fig.width = 8, fig.height = 5)
+```
+
+# Appendix B — Seasonal variation of the load regimes
+
+This appendix asks a single, focused question: **is the three-regime
+structure of the hourly load factor (and its diurnal cycle) stable
+across the seasons, or does the weight/timing of the regimes shift?** It
+is a robustness/extension check on Tasks 3–4, not a new model.
+
+Two caveats must be stated up front, because they shape what the
+analysis can and cannot say.
+
+1.  **The load factor is normalised day-by-day on its own peak.** A
+    seasonal difference therefore does **not** reflect the *level* of
+    consumption (e.g. higher absolute summer load from cooling
+    disappears under the normalisation): it reflects only the **shape**
+    of the daily load curve.
+
+2.  **Ramadan is a strong confounder.** In Morocco the daily activity
+    pattern changes markedly during Ramadan (activity shifted to the
+    evening/night). In 2017 Ramadan ran from about **27 May to 24
+    June**, straddling late spring and early summer, so any apparent
+    "summer effect" could in fact be a Ramadan effect. We treat the
+    Ramadan window as a **separate group** so it cannot silently
+    contaminate the seasonal comparison.
+
+We use the **lightweight (reuse) approach**: we do *not* refit the
+mixture per season. We keep the global
+$H = `r if (exists("best_H")) best_H else 3`$ fit and its mean-ordered
+MAP assignment `z_map` from Task 3, and we simply slice those existing
+assignments by season. This is fast and answers the robustness question
+directly; a per-season refit (with its own credible intervals) would be
+the natural next step only if the descriptives below reveal differences
+worth quantifying.
+
+## Dependencies
+
+This file is meant to be knitted/run **in the same R session, after**
+`Final_Project.Rmd`, so that the global objects are available in memory.
+The guard below stops with a clear message if anything is missing.
+
+```{r appendix-guard}
+needed <- c("lf_fit", "my_data", "hours", "z_map", "best_H",
+            "COMPONENT_COLS", "N")
+missing_objs <- needed[!vapply(needed, exists, logical(1))]
+if (length(missing_objs))
+  stop("Run Final_Project.Rmd first in this session. Missing objects: ",
+       paste(missing_objs, collapse = ", "))
+```
+
+## Deriving the season and the Ramadan window
+
+We map each observation's calendar `date` to a meteorological season
+(DJF / MAM / JJA / SON) and flag the Ramadan-2017 window. Observations
+falling in Ramadan are pulled out into their own group, so "Summer
+(JJA)" below means *summer excluding Ramadan*.
+
+```{r season-derivation}
+# Parse dates (CSV format is M/D/YYYY) and extract the month
+dates <- as.Date(lf_fit$date, format = "%m/%d/%Y")
+if (all(is.na(dates)))
+  stop("Date parsing failed: check the format of lf_fit$date (expected M/D/YYYY).")
+month <- as.integer(format(dates, "%m"))
+
+# Meteorological season from month
+month_to_season <- function(m)
+  ifelse(m %in% c(12, 1, 2), "Winter (DJF)",
+  ifelse(m %in% 3:5,         "Spring (MAM)",
+  ifelse(m %in% 6:8,         "Summer (JJA)",
+                             "Autumn (SON)")))
+
+season <- factor(month_to_season(month),
+                 levels = c("Winter (DJF)", "Spring (MAM)",
+                            "Summer (JJA)", "Autumn (SON)"))
+
+# Ramadan 2017 window (approx. 27 May – 24 June 2017)
+ramadan_start <- as.Date("2017-05-27")
+ramadan_end   <- as.Date("2017-06-24")
+is_ramadan    <- !is.na(dates) & dates >= ramadan_start & dates <= ramadan_end
+
+# Grouping variable: seasons, with Ramadan pulled out as its own group
+grp_chr <- as.character(season)
+grp_chr[is_ramadan] <- "Ramadan 2017"
+grp <- factor(grp_chr,
+              levels = c(levels(season), "Ramadan 2017"))
+
+# A colour per group (used for the descriptive plots below)
+grp_levels <- levels(grp)
+grp_cols   <- setNames(
+  c("steelblue", "darkgreen", "tomato", "goldenrod3", "purple")[seq_along(grp_levels)],
+  grp_levels)
+```
+
+## B.1 Descriptive analysis (no model)
+
+### Group sizes
+
+Before anything else: how many observations fall in each group.
+Unbalanced groups mean noisier per-group estimates, and a small Ramadan
+group means its curve should be read with caution.
+
+```{r group-counts}
+counts <- as.data.frame(table(Group = grp))
+names(counts)[2] <- "n"
+knitr::kable(counts, caption = "Number of observations per group.")
+```
+
+### Per-group summary statistics of the load factor
+
+```{r group-summaries}
+summ_by_grp <- do.call(rbind, lapply(grp_levels, function(g) {
+  v <- my_data[grp == g]
+  data.frame(Group  = g,
+             n      = length(v),
+             Min    = round(min(v),    3),
+             Median = round(median(v), 3),
+             Mean   = round(mean(v),   3),
+             Max    = round(max(v),    3))
+}))
+knitr::kable(summ_by_grp, row.names = FALSE,
+             caption = "Load-factor summary statistics by group.")
+```
+
+### Empirical density of the load factor by group
+
+If the bounded, multimodal shape that motivated the Beta mixture
+persists in every season, the global three-regime description is robust;
+shifts in the location/height of the modes signal a seasonal change in
+the *shape* of the daily load curve.
+
+```{r density-by-group}
+# Pre-compute densities so we can set a common y-axis
+dens_list <- lapply(grp_levels, function(g)
+  density(my_data[grp == g], from = 0.01, to = 0.99))
+names(dens_list) <- grp_levels
+ymax <- max(vapply(dens_list, function(d) max(d$y), numeric(1)))
+
+plot(NA, xlim = c(0, 1), ylim = c(0, ymax),
+     xlab = "Load factor (hourly / daily peak)", ylab = "Density",
+     main = "Empirical load-factor density by season (Ramadan separated)")
+for (g in grp_levels)
+  lines(dens_list[[g]], col = grp_cols[g], lwd = 2.5)
+legend("topleft", legend = grp_levels, col = grp_cols,
+       lwd = 2.5, bty = "n", cex = 0.9)
+```
+
+*Read-off (fill in after knitting):* compare whether the near-peak bulge
+(mass close to 1) and the off-peak bulk keep the same relative heights
+across seasons, and whether the Ramadan curve departs from its
+surrounding seasons.
+
+## B.2 Diurnal regimes by season (reusing the global fit)
+
+We now reuse the global MAP assignment `z_map` (components mean-ordered:
+1 = off-peak, `r if (exists("best_H")) best_H else 3` = near-peak) and
+plot, **within each group**, the empirical fraction of observations in
+each component as a function of `hour`. This is exactly the Task-3 plot,
+sliced by season, so it exposes whether the *timing* of the regimes
+shifts (e.g. the evening near-peak window starting earlier/later with
+daylight, or moving in Ramadan).
+
+```{r fractions-by-hour-faceted, fig.height = 6}
+plot_fraction_by_hour <- function(sel, title) {
+  tab <- table(factor(hours[sel], levels = 0:23),
+               factor(z_map[sel], levels = 1:best_H))
+  fm  <- prop.table(tab, margin = 1)   # each hour sums to 1 (NaN where no obs)
+  matplot(0:23, as.matrix(fm), type = "b", pch = 19, lty = 1,
+          col = COMPONENT_COLS[1:best_H], lwd = 2, ylim = c(0, 1),
+          xlab = "Hour of day", ylab = "Fraction", main = title)
+}
+
+# One reference panel for all data, then one per group
+panels <- c("All data", grp_levels)
+par(mfrow = c(2, 3), mar = c(4, 4, 3, 1))
+for (p in panels) {
+  sel <- if (p == "All data") rep(TRUE, N) else (grp == p)
+  plot_fraction_by_hour(sel, p)
+}
+par(mfrow = c(1, 1))
+legend_lab <- paste("Component", 1:best_H)
+```
+
+(Legend: colours are the global component colours, Component 1 =
+off-peak … Component `r if (exists("best_H")) best_H else 3` =
+near-peak.)
+
+### Focused check: Ramadan vs non-Ramadan summer
+
+Because Ramadan overlaps June, the cleanest way to separate the two
+effects is to compare the Ramadan window against **summer days that are
+*not* in Ramadan**, for the near-peak component (the one most tied to
+the daily peak hour). A visible horizontal shift here is evidence that
+part of any "seasonal" pattern is in fact Ramadan-driven.
+
+```{r ramadan-vs-summer}
+nearpeak <- best_H   # highest-mean component
+
+frac_nearpeak_by_hour <- function(sel) {
+  tab <- table(factor(hours[sel], levels = 0:23),
+               factor(z_map[sel], levels = 1:best_H))
+  fm  <- prop.table(tab, margin = 1)
+  as.numeric(fm[, nearpeak])
+}
+
+sel_ram    <- is_ramadan
+sel_summer <- season == "Summer (JJA)" & !is_ramadan
+
+f_ram    <- frac_nearpeak_by_hour(sel_ram)
+f_summer <- frac_nearpeak_by_hour(sel_summer)
+
+plot(0:23, f_summer, type = "b", pch = 19, lwd = 2, col = "tomato",
+     ylim = c(0, 1), xlab = "Hour of day",
+     ylab = sprintf("Fraction in near-peak component (%d)", nearpeak),
+     main = "Near-peak regime by hour: Ramadan vs non-Ramadan summer")
+lines(0:23, f_ram, type = "b", pch = 17, lwd = 2, col = "purple")
+legend("topleft",
+       legend = c("Summer (non-Ramadan)", "Ramadan 2017"),
+       col = c("tomato", "purple"), pch = c(19, 17), lwd = 2, bty = "n")
+```
+
+## Discussion and limitations
+
+*Template — complete with what the figures actually show after
+knitting.*
+
+-   **Robustness (does the structure hold?).** If the three modes appear
+    in every season's empirical density and each season's by-hour panel
+    shows the same off-peak→intermediate→near-peak progression, the
+    global three-regime description is confirmed to be
+    season-independent.
+
+-   **Discovery (what shifts?).** Differences are expected in the
+    *timing* of the diurnal cycle (the near-peak window tends to track
+    daylight / evening demand) rather than in the *number* of regimes.
+    Describe any visible horizontal shift of the near-peak curve
+    between, e.g., winter and summer.
+
+-   **Ramadan.** Comment on the Ramadan-vs-summer panel: if the
+    near-peak curve is shifted, part of the late-spring/summer pattern
+    is a Ramadan effect, not a pure seasonal one — which is exactly why
+    Ramadan was kept separate.
+
+-   **Caveats to keep.** (i) Differences are in daily *shape*, not in
+    consumption level (per-day normalisation). (ii) Per-group sample
+    sizes differ (see the counts table); hours with few observations
+    give noisy fractions, so do not over-interpret single-hour wiggles.
+    (iii) This is a descriptive reuse of the global fit; quantifying the
+    differences with credible intervals would require a per-season refit
+    of the mixture. \`\`\`

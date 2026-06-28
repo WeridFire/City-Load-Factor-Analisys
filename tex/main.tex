@@ -250,11 +250,7 @@ is immune to label switching.
 
 We fit the single Beta ($H=1$) and the mixtures $H=2,\dots,5$ and rank them
 by WAIC, reading the criterion together with its standard error (SE) rather
-than picking the bare minimum. We distinguish two scales: the SE of each
-WAIC estimate (column SE), which measures the absolute uncertainty of the
-criterion, and the standard error of the pairwise \emph{difference}
-(se\_diff from \texttt{loo\_compare}), which is the sharper test of whether
-one model out-predicts another. Following the one-standard-error rule, among
+than picking the bare minimum. Following the one-standard-error rule, among
 the models whose WAIC lies within one SE of the minimum we adopt the most
 parsimonious.
 
@@ -262,7 +258,7 @@ parsimonious.
 \centering
 \caption{Model selection by WAIC.}
 \label{tab:waic}
-\begin{tabular}{lrrrr@{\hskip 2.2em}rr}
+\begin{tabular}{lrr}
 \toprule
 Model & WAIC & SE \\
 \midrule
@@ -275,14 +271,12 @@ $H=5$ & $-3124.4$ & 61.4\\
 \end{tabular}
 \end{table}
 
-WAIC drops sharply from $H=1$ to $H=3$ and
-then nearly flattens. The bare minimum is at $H=5$, and the pairwise test is
-sensitive enough to register the residual gains as real, so $H=5$ is, in
-strict predictive terms, marginally the best. These gains are nevertheless
-tiny: the WAIC spread across $H=3,4,5$ is only about $24$ against a per-model
-SE of $\sim\!60$, so all three sit within one standard error of the minimum.
-By the one-standard-error rule we therefore adopt the most parsimonious of
-them, $H=\bestH$ (Figure~\ref{fig:waicH}), trading a negligible amount of
+WAIC drops sharply from $H=1$ to $H=3$ and then nearly flattens. The bare
+minimum is at $H=5$, but the residual gains are tiny: the WAIC spread across
+$H=3,4,5$ is only about $24$, well below the per-model SE of $\sim\!60$, so
+all three sit within one standard error of the minimum. By the
+one-standard-error rule we therefore adopt the most parsimonious of them,
+$H=\bestH$ (Figure~\ref{fig:waicH}), trading a negligible amount of
 in-sample predictive accuracy for the clearly interpretable three-regime
 structure analysed below.
 
@@ -320,7 +314,7 @@ draw the $H$ components are sorted by their Beta mean
 $\mu_h=\alpha_h/(\alpha_h+\beta_h)$, so ``Component~1'' is consistently the
 lowest-mean (off-peak) regime and ``Component~3'' the highest-mean
 (near-peak) regime. This does not alter the fit (the mixture density and
-WAIC are unchanged) it only fixes the labels for interpretation.
+WAIC are unchanged); it only fixes the labels for interpretation.
 
 \subsection{Posterior summaries of the selected model}
 
@@ -627,7 +621,7 @@ $\mathrm{SE}\approx 56$), so the parsimonious choice is $K=\bestK$.
 \centering
 \caption{WAIC for the Task-4 multinomial logit by number of harmonics $K$.}
 \label{tab:waicK}
-\begin{tabular}{lrrrr@{\hskip 2.2em}rr}
+\begin{tabular}{lrr}
 \toprule
 Model  & WAIC & SE \\
 \midrule
