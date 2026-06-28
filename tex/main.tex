@@ -352,10 +352,22 @@ mass near the daily peak. The credible intervals are away from zero
 for all shape parameters, confirming that each regime is well identified.
 
 \begin{figure}[H]
-\centering
-\fig[0.65\linewidth]{03_anatomy.png}
-\caption{Mixture anatomy}
-\label{fig:anatomy}
+    \centering
+    \begin{subfigure}{0.5\textwidth}
+        \centering
+        \includegraphics[width=\linewidth]{tex/figures/03_anatomy.png}
+        \caption{Mixture anatomy}
+        \label{fig:anatomy}
+    \end{subfigure}\hfill
+    \begin{subfigure}{0.5\textwidth}
+        \centering
+        \includegraphics[width=\linewidth]{tex/figures/03B_components.png}
+        \caption{Components}
+        \label{fig:components}
+    \end{subfigure}
+    
+    \caption{Mixture anatomy and components}
+    \label{fig:entrambe}
 \end{figure}
 
 \subsection{Posterior predictive check and mode recovery}
@@ -502,7 +514,7 @@ Figure~\ref{fig:byhour_affiancate} (points).}
 \newpage
 
 % ==================================================================
-\section{Prediction exercise (out-of-sample)}
+\section{Prediction exercise}
 % ==================================================================
 
 The WAIC above is an in-sample criterion. To verify that \texttt{hour}
