@@ -83,20 +83,36 @@
 
 
 \begin{document}
+
 \begin{titlepage}
     \centering
-    {\scshape\large AY 2025/2026 \par}
+    \vspace*{1cm}
+    % Logo
+    \includegraphics[width=120pt]{tex/figures/logo-polimi.pdf}\par
+    \vspace{0.8cm}
+    % University
+    {\scshape\Large Politecnico di Milano \par}
+    \vspace{2.5cm}
+    % Course / Field
+    {\huge\bfseries Bayesian Learning and Monte Carlo Simulation Project\par}
+    \vspace{0.2cm}
+    \rule{\linewidth}{0.4pt} % Thin horizontal line
+    \vspace{0.2cm}
+    % Project Title
+    {\LARGE\bfseries\par Hourly City Load Factor \par }
+    \vspace{2.5cm}
+    % Authors organized in a clean table
+    {\large\textbf{Authors}\par}
+    \vspace{0.3cm}
+    {\large {Manuel Maiuolo \par Adriano Claudio Mangoni \par Filippo Maretti \par Davide Martini}}
     \vfill
-    \includegraphics[width=100pt]{tex/figures/logo-polimi.pdf}\par\vspace{1cm}
-    {\scshape\LARGE Politecnico di Milano \par}
-    \vspace{1.5cm}
-    {\huge\bfseries Bayesian Analysis of the Hourly City Load Factor\par}
-    \vspace{2cm}
-    {\large {Filippo Maretti\quad Davide Martini\par Manuel Maiuolo\quad Adriano Claudio Mangoni}
-    \vfill
-    \vfill
-    {\large}}
+    % Academic Year
+    {\large\textbf{Academic Year}\par}
+    \vspace{0.3cm}
+    {\large {2025/2026}}
+    \vspace*{1cm}
 \end{titlepage}
+
 \clearpage
 \tableofcontents
 \pagenumbering{gobble}
@@ -248,21 +264,20 @@ parsimonious.
 \label{tab:waic}
 \begin{tabular}{lrrrr@{\hskip 2.2em}rr}
 \toprule
-Model & ELPD & p\_eff & WAIC & SE & $\Delta$elpd & se\_diff\\
+Model & WAIC & SE \\
 \midrule
-$H=1$ & 817.1 & 2.8 & $-1634.1$ & 31.9 & $-745.1$ & 32.5\\
-$H=2$ & 1344.7 & 3.9 & $-2689.4$ & 52.0 & $-217.5$ & 18.6\\
-$H=\mathbf{3}$ & \textbf{1550.4} & 6.4 & $\mathbf{-3100.9}$ & 60.7 & $-11.8$ & 4.0\\
-$H=4$ & 1560.3 & 9.5 & $-3120.7$ & 60.9 & $-1.9$ & 0.5\\
-$H=5$ & 1562.2 & 9.1 & $-3124.4$ & 61.4 & 0.0 & 0.0\\
+$H=1$  & $-1634.1$ & 31.9 \\
+$H=2$  & $-2689.4$ & 52.0\\
+$H=\mathbf{3}$  & $\mathbf{-3100.9}$ & 60.7 \\
+$H=4$  & $-3120.7$ & 60.9 \\
+$H=5$ & $-3124.4$ & 61.4\\
 \bottomrule
 \end{tabular}
 \end{table}
 
-WAIC drops sharply from $H=1$ to $H=3$ (an ELPD gain of about $1390$) and
+WAIC drops sharply from $H=1$ to $H=3$ and
 then nearly flattens. The bare minimum is at $H=5$, and the pairwise test is
-sensitive enough to register the residual gains as real
-($\Delta\mathrm{elpd}=-11.8\pm4.0$ for $H=3$ versus $H=5$), so $H=5$ is, in
+sensitive enough to register the residual gains as real, so $H=5$ is, in
 strict predictive terms, marginally the best. These gains are nevertheless
 tiny: the WAIC spread across $H=3,4,5$ is only about $24$ against a per-model
 SE of $\sim\!60$, so all three sit within one standard error of the minimum.
@@ -337,10 +352,22 @@ mass near the daily peak. The credible intervals are away from zero
 for all shape parameters, confirming that each regime is well identified.
 
 \begin{figure}[H]
-\centering
-\fig[0.7\linewidth]{03_anatomy.png}
-\caption{Mixture anatomy}
-\label{fig:anatomy}
+    \centering
+    \begin{subfigure}{0.5\textwidth}
+        \centering
+        \includegraphics[width=\linewidth]{tex/figures/03_anatomy.png}
+        \caption{Mixture anatomy}
+        \label{fig:anatomy}
+    \end{subfigure}\hfill
+    \begin{subfigure}{0.5\textwidth}
+        \centering
+        \includegraphics[width=\linewidth]{tex/figures/03B_components.png}
+        \caption{Components}
+        \label{fig:components}
+    \end{subfigure}
+    
+    \caption{Mixture anatomy and components}
+    \label{fig:entrambe}
 \end{figure}
 
 \subsection{Posterior predictive check and mode recovery}
@@ -360,9 +387,9 @@ visible peaks of the empirical distribution. The $H=\bestH$ mixture thus reprodu
 multimodal profile that a single Beta is structurally unable to capture.
 
 
-\begin{figure}
+\begin{figure}[H]
 \centering
-\fig[0.7\linewidth]{04_ppd_modes.png}
+\fig[0.65\linewidth]{04_ppd_modes.png}
 \caption{Posterior predictive density of the selected $H=\bestH$ model
 against the empirical histogram.}
 \label{fig:ppd}
@@ -443,7 +470,7 @@ to real operating regimes rather than statistical artefacts.
 \section{Predicting the load regime from the hour: multinomial logit}
 % ==================================================================
 
-We now turn the relationship around and ask \emph{how predictable the
+We now ask \emph{how predictable the
 regime is from the time of day}, treating the MAP label $\hat z_i$ as the
 response of a supervised model whose only covariate is \texttt{hour}.
 Because \texttt{hour} is cyclic ($23$ is adjacent to $0$), we expand it on a
@@ -470,25 +497,24 @@ of the minimum, so we adopt the parsimonious $K=\bestK$
 
 The predicted probability curves (Figure~\ref{fig:task4}) closely track the
 empirical fractions of the previous section: both estimate the same quantity
-$P(\text{component}\mid\text{hour})$, but the logit borrows strength across
-adjacent hours through the Fourier basis and yields a smooth, strictly
-periodic profile, whereas the empirical fractions are noisier at hours with
+$P(\text{component}\mid\text{hour})$, but the logit takes into account 
+adjacent hours through the Fourier basis and yields a smooth periodic profile, whereas the empirical fractions are noisier at hours with
 few sampled observations. The agreement confirms that the latent load
 regimes are, to a good approximation, a deterministic periodic function of
 the time of day.
 
 \begin{figure}[H]
 \centering
-\fig[0.75\linewidth]{07_task4.png}
+\fig[0.75\linewidth]{07_predictedVSempirical.png}
 \caption{Multinomial logit ($K=\bestK$): predicted $P(\text{component}\mid
 \text{hour})$ (curves) overlaid on the empirical fractions of
-Figure~\ref{fig:byhour} (points). The smooth periodic model reproduces the
-empirical pattern.}
+Figure~\ref{fig:byhour_affiancate} (points).}
 \label{fig:task4}
 \end{figure}
+\newpage
 
 % ==================================================================
-\section{Prediction exercise (out-of-sample)}
+\section{Prediction exercise}
 % ==================================================================
 
 The WAIC above is an in-sample criterion. To verify that \texttt{hour}
@@ -551,6 +577,7 @@ $n=\Nfull$ sample with $\nchains$ chains and $\niter$ retained iterations per
 chain; a still longer run would only sharpen the credible intervals without
 changing the qualitative conclusions.
 
+\newpage
 % ==================================================================
 \appendix
 \section{MCMC diagnostics and supplementary results}
@@ -569,8 +596,7 @@ the high raw $\widehat R$ is a labelling artefact, not a mixing failure.
 \begin{table}[H]
 \centering
 \caption{Raw (label-affected) Gelman--Rubin $\widehat R$ for the $H=\bestH$
-component parameters. Values above $1.10$ reflect label switching, not
-non-convergence (cf.\ the invariant-scale $\widehat R=\rhatlik$).}
+component parameters.}
 \label{tab:rhat}
 \begin{tabular}{lc@{\hskip 2em}lc@{\hskip 2em}lc}
 \toprule
@@ -585,7 +611,7 @@ $\alpha_3$ & 8.30 & $\beta_3$ & 1.17 & $\pi_3$ & 1.02\\
 
 \begin{figure}[H]
 \centering
-\fig[0.85\linewidth]{A1_traces.png}
+\fig[0.7\linewidth]{08_labelSwitchingTraces.png}
 \caption{Trace plots (and marginal densities) for the $H=\bestH$ component
 parameters, showing the label-switching signature.}
 \label{fig:trace}
@@ -603,13 +629,13 @@ $\mathrm{SE}\approx 56$), so the parsimonious choice is $K=\bestK$.
 \label{tab:waicK}
 \begin{tabular}{lrrrr@{\hskip 2.2em}rr}
 \toprule
-Model & ELPD & p\_eff & WAIC & SE & $\Delta$elpd & se\_diff\\
+Model  & WAIC & SE \\
 \midrule
-$K=1$ & $-678.0$ & 9.5 & 1356.1 & 80.7 & $-162.1$ & 23.5\\
-$K=2$ & $-608.2$ & 14.4 & 1216.4 & 71.2 & $-92.3$ & 16.6\\
-$K=\mathbf{3}$ & $\mathbf{-535.9}$ & 13.8 & $\mathbf{1071.8}$ & 57.8 & $-20.0$ & 6.9\\
-$K=4$ & $-516.1$ & 16.4 & 1032.2 & 54.9 & $-0.2$ & 2.8\\
-$K=5$ & $-515.9$ & 18.8 & 1031.8 & 55.7 & 0.0 & 0.0\\
+$K=1$  & 1356.1 & 80.7 \\
+$K=2$  & 1216.4 & 71.2 \\
+$K=\mathbf{3}$  & $\mathbf{1071.8}$ & 57.8 \\
+$K=4$  & 1032.2 & 54.9 \\
+$K=5$  & 1031.8 & 55.7 \\
 \bottomrule
 \end{tabular}
 \end{table}
