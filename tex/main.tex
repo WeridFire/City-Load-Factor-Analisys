@@ -1,4 +1,4 @@
-\documentclass[11pt,a4paper]{article}
+\documentclass{article}
 
 % ------------------------------------------------------------------
 % Bayesian Learning and Monte Carlo Simulations -- Final Project 2026
@@ -31,18 +31,18 @@
   \IfFileExists{figures/#2}%
     {\includegraphics[width=#1]{figures/#2}}%
     {\fbox{\parbox[c][3.4cm][c]{0.95\linewidth}{\centering\ttfamily
-       figures/#2\\[2pt]\normalfont\small(export this plot from the R notebook)}}}%
+       figures/#2\\[2pt]\normalfont\small}}}%
 }
 
 % ==================================================================
 % KEY NUMERICAL RESULTS -- SINGLE SOURCE OF TRUTH
-% These come from the exploratory run (n = 400 subsample, 2 chains,
-% 1000 burn-in + 2000 iterations). Re-run the notebook on the full
-% n = 2000 with more chains/iterations and update ONLY this block.
+% These come from the final full run (n = 2000, 4 chains,
+% 1000 burn-in + 2000 retained iterations per chain). To refresh,
+% re-knit Final_Project.Rmd and update ONLY this block.
 % ==================================================================
 \newcommand{\Nfull}{2000}
-\newcommand{\Nfit}{400}
-\newcommand{\nchains}{2}
+\newcommand{\Nfit}{2000}
+\newcommand{\nchains}{4}
 \newcommand{\nburn}{1000}
 \newcommand{\niter}{2000}
 
@@ -54,59 +54,54 @@
 
 % Task 1 -- chosen model
 \newcommand{\bestH}{3}
-\newcommand{\waicHthree}{-567.1}
-\newcommand{\seHthree}{22.6}
+\newcommand{\waicHthree}{-3100.9}
+\newcommand{\seHthree}{60.7}
 
 % Task 1 -- components (label-switch corrected, sorted by mean)
-\newcommand{\piA}{0.367}\newcommand{\alA}{40.5}\newcommand{\beA}{31.6}\newcommand{\muA}{0.562}
-\newcommand{\piB}{0.373}\newcommand{\alB}{66.0}\newcommand{\beB}{22.2}\newcommand{\muB}{0.749}
-\newcommand{\piC}{0.261}\newcommand{\alC}{8.16}\newcommand{\beC}{0.64}\newcommand{\muC}{0.927}
+\newcommand{\piA}{0.367}\newcommand{\alA}{45.38}\newcommand{\beA}{34.97}\newcommand{\muA}{0.565}
+\newcommand{\piB}{0.367}\newcommand{\alB}{102.17}\newcommand{\beB}{34.53}\newcommand{\muB}{0.747}
+\newcommand{\piC}{0.266}\newcommand{\alC}{5.61}\newcommand{\beC}{0.54}\newcommand{\muC}{0.912}
 
 % Task 2 -- predictive modes
-\newcommand{\modeOne}{0.564}
-\newcommand{\modeTwo}{0.756}
+\newcommand{\modeOne}{0.567}
+\newcommand{\modeTwo}{0.751}
 
 % diagnostics
-\newcommand{\rhatlik}{1.02}
-\newcommand{\esslik}{109}
+\newcommand{\rhatlik}{1.04}
+\newcommand{\esslik}{519}
 
 % Task 4 -- harmonics
 \newcommand{\bestK}{3}
 
 % prediction exercise
-\newcommand{\ntest}{80}
-\newcommand{\logloss}{0.295}
-\newcommand{\loglossbase}{1.060}
+\newcommand{\ntest}{400}
+\newcommand{\logloss}{0.276}
+\newcommand{\loglossbase}{1.114}
 \newcommand{\acc}{0.900}
-\newcommand{\accbase}{0.384}
+\newcommand{\accbase}{0.395}
 % ==================================================================
 
-\title{\textbf{Bayesian Analysis of the Hourly City Load Factor}\\[4pt]
-\large Beta mixture modelling, latent structure and time-of-day prediction\\
-\normalsize Bayesian Learning and Monte Carlo Simulations --- Final Project 2026 (Dataset 11)}
-\author{}
-\date{\today}
 
 \begin{document}
-\maketitle
-
-\begin{abstract}
-\noindent
-We model the distribution of the \emph{hourly city load factor} of Tetouan
-(Morocco) --- the ratio between the average electrical load in a given hour
-and the daily peak load --- as a finite mixture of Beta densities estimated
-by MCMC in JAGS. Model selection by WAIC over $H=1,\dots,5$ components
-selects $H=\bestH$, which recovers the multimodal shape of the empirical
-distribution that a single Beta cannot reproduce. We resolve the
-label-switching that affects mixture posteriors, report identifiable
-per-component summaries with $95\%$ credible intervals, and confirm
-robustness through a prior sensitivity analysis. We then link the latent
-load regimes to the time of day: a maximum-a-posteriori (MAP) cluster
-assignment shows a clear diurnal pattern, and a multinomial logistic
-regression on a Fourier expansion of \texttt{hour} reproduces it smoothly.
-An out-of-sample exercise confirms that the hour of the day is a genuinely
-predictive covariate of the load regime.
-\end{abstract}
+\begin{titlepage}
+    \centering
+    {\scshape\large AY 2025/2026 \par}
+    \vfill
+    \includegraphics[width=100pt]{tex/figures/logo-polimi.pdf}\par\vspace{1cm}
+    {\scshape\LARGE Politecnico di Milano \par}
+    \vspace{1.5cm}
+    {\huge\bfseries Bayesian Analysis of the Hourly City Load Factor\par}
+    \vspace{2cm}
+    {\large {Filippo Maretti\quad Davide Martini\par Manuel Maiuolo\quad Adriano Claudio Mangoni}
+    \vfill
+    \vfill
+    {\large}}
+\end{titlepage}
+\clearpage
+\tableofcontents
+\pagenumbering{gobble}
+\clearpage
+\pagenumbering{arabic}
 
 % ==================================================================
 \section{Data and problem description}
@@ -152,9 +147,7 @@ fractions and validating it out of sample.
 \begin{figure}[H]
 \centering
 \fig[0.7\linewidth]{01_hist.png}
-\caption{Empirical density of the hourly load factor ($n=\Nfull$). The
-bounded, right-skewed and multimodal profile motivates a Beta-mixture
-likelihood.}
+\caption{Empirical density of the hourly load factor ($n=\Nfull$). }
 \label{fig:hist}
 \end{figure}
 
@@ -192,7 +185,7 @@ x_i\mid z_i\;\sim\;\mathrm{Beta}(\alpha_{z_i},\beta_{z_i}).
 \end{equation}
 This is the standard mixture data augmentation: conditioning on $z_i$ turns
 the likelihood into a product of ordinary Beta terms that JAGS samples
-efficiently with a Gibbs/slice scheme.
+efficiently.
 
 \subsection{Prior distributions and hyperparameters}
 
@@ -206,25 +199,18 @@ drive the posterior:
 with rate $\lambda=0.1$. The symmetric Dirichlet$(\mathbf 1_H)$ is uniform
 over the probability simplex and expresses no preference among components.
 The Exponential prior keeps the shape parameters strictly positive while
-remaining diffuse: with $\lambda=0.1$ the prior mean of each shape parameter
-is $1/\lambda=10$ and the prior standard deviation is also $10$, comfortably
-covering the range of shapes the data require (posterior $\alpha,\beta$ up to
-$\sim\!70$). The influence of these two hyperparameters ($\lambda$ and the
+remaining diffuse. The influence of these two hyperparameters ($\lambda$ and the
 Dirichlet concentration $c$) is assessed explicitly in
 Section~\ref{sec:sens}.
 
 \subsection{Posterior computation and model-selection criterion}
 \label{sec:algo}
 
-\textbf{Algorithm.} All posteriors are sampled by MCMC in \texttt{JAGS}
-(via \texttt{rjags}). For the results reported here we ran $\nchains$ chains
+\textbf{Algorithm.} All posteriors are sampled by MCMC in \texttt{JAGS}. For the results reported here we ran $\nchains$ chains
 with dispersed initial values, $\nburn$ burn-in iterations and $\niter$
 retained iterations per chain. Convergence is monitored with trace plots,
 the Gelman--Rubin statistic $\widehat R$ and effective sample size
-(Section~\ref{sec:diag} and Appendix~\ref{app:diag}). The present figures
-are produced on a $\Nfit$-row exploratory subsample for speed; the final
-report will be regenerated on the full $n=\Nfull$ sample with additional
-chains and iterations.
+(Section~\ref{sec:diag} and Appendix~\ref{app:diag}). 
 
 \textbf{Model selection.} Competing values of $H$ are compared with the
 \emph{Widely Applicable Information Criterion} (WAIC), a fully Bayesian
@@ -239,59 +225,56 @@ penalises effective complexity. \textbf{Crucially, for a mixture WAIC must
 use the \emph{marginal} per-observation density}
 $\log\sum_h \pi_h^{(s)}\mathrm{Beta}(x_i\mid\alpha_h^{(s)},\beta_h^{(s)})$,
 integrating out $z_i$. We compute this quantity inside JAGS with a numerically
-stable log-sum-exp evaluation and feed it to \texttt{loo::waic}. Using the
-density conditional on the sampled $z_i$ would answer a different predictive
-question, inflate $p_{\mathrm{WAIC}}$ and spuriously favour more components;
-the marginal density is also invariant to label permutations, so this WAIC
+stable log-sum-exp evaluation and feed it to \texttt{loo::waic}. The marginal density is also invariant to label permutations, so this WAIC
 is immune to label switching.
 
 % ==================================================================
-\section{Model selection: how many components?}
+\section{Model selection}
 % ==================================================================
 
 We fit the single Beta ($H=1$) and the mixtures $H=2,\dots,5$ and rank them
 by WAIC, reading the criterion together with its standard error (SE) rather
-than picking the bare minimum: two models whose WAIC differ by less than
-$\sim\!1$--$2$ SE are statistically indistinguishable, and among tied models
-the most parsimonious is preferable.
+than picking the bare minimum. We distinguish two scales: the SE of each
+WAIC estimate (column SE), which measures the absolute uncertainty of the
+criterion, and the standard error of the pairwise \emph{difference}
+(se\_diff from \texttt{loo\_compare}), which is the sharper test of whether
+one model out-predicts another. Following the one-standard-error rule, among
+the models whose WAIC lies within one SE of the minimum we adopt the most
+parsimonious.
 
 \begin{table}[H]
 \centering
-\caption{Model selection by WAIC. \texttt{ELPD} is the expected log
-predictive density, \texttt{p\_eff}$=p_{\mathrm{WAIC}}$ the effective number
-of parameters, lower WAIC is better. The right block reports
-\texttt{loo\_compare} differences against the best model.}
+\caption{Model selection by WAIC.}
 \label{tab:waic}
 \begin{tabular}{lrrrr@{\hskip 2.2em}rr}
 \toprule
 Model & ELPD & p\_eff & WAIC & SE & $\Delta$elpd & se\_diff\\
 \midrule
-$H=1$ & 163.9 & 2.7 & $-327.8$ & 14.4 & $-119.7$ & 12.8\\
-$H=2$ & 249.7 & 3.9 & $-499.4$ & 20.5 & $-33.8$  & 6.7\\
-$H=\mathbf{3}$ & \textbf{283.5} & 6.2 & $\mathbf{-567.1}$ & 22.6 & \textbf{0.0} & 0.0\\
-$H=4$ & 282.3 & 6.6 & $-564.6$ & 22.1 & $-1.2$ & 0.5\\
-$H=5$ & 283.3 & 6.4 & $-566.7$ & 22.4 & $-0.2$ & 0.4\\
+$H=1$ & 817.1 & 2.8 & $-1634.1$ & 31.9 & $-745.1$ & 32.5\\
+$H=2$ & 1344.7 & 3.9 & $-2689.4$ & 52.0 & $-217.5$ & 18.6\\
+$H=\mathbf{3}$ & \textbf{1550.4} & 6.4 & $\mathbf{-3100.9}$ & 60.7 & $-11.8$ & 4.0\\
+$H=4$ & 1560.3 & 9.5 & $-3120.7$ & 60.9 & $-1.9$ & 0.5\\
+$H=5$ & 1562.2 & 9.1 & $-3124.4$ & 61.4 & 0.0 & 0.0\\
 \bottomrule
 \end{tabular}
 \end{table}
 
-WAIC drops sharply from $H=1$ to $H=3$ ($\Delta\mathrm{elpd}\approx 120$ and
-$34$ standard-error-significant units for the two steps) and then plateaus:
-$H=4$ and $H=5$ are within one SE of $H=3$ and do not improve the fit
-($\Delta\mathrm{elpd}=-1.2$ and $-0.2$, both well inside their se\_diff).
-The lowest-WAIC \emph{and} the most parsimonious choice therefore coincide
-at $H=\bestH$ (Figure~\ref{fig:waicH}). We adopt $H=\bestH$ for all
-subsequent analysis. The effective number of parameters
-($p_{\mathrm{WAIC}}\approx6.2$ for three components) is close to the
-$3H-1=8$ free parameters, indicating that all three components are genuinely
-supported by the data rather than redundant.
+WAIC drops sharply from $H=1$ to $H=3$ (an ELPD gain of about $1390$) and
+then nearly flattens. The bare minimum is at $H=5$, and the pairwise test is
+sensitive enough to register the residual gains as real
+($\Delta\mathrm{elpd}=-11.8\pm4.0$ for $H=3$ versus $H=5$), so $H=5$ is, in
+strict predictive terms, marginally the best. These gains are nevertheless
+tiny: the WAIC spread across $H=3,4,5$ is only about $24$ against a per-model
+SE of $\sim\!60$, so all three sit within one standard error of the minimum.
+By the one-standard-error rule we therefore adopt the most parsimonious of
+them, $H=\bestH$ (Figure~\ref{fig:waicH}), trading a negligible amount of
+in-sample predictive accuracy for the clearly interpretable three-regime
+structure analysed below.
 
 \begin{figure}[H]
 \centering
 \fig[0.7\linewidth]{02_waic_H.png}
-\caption{WAIC against the number of components $H$ with $\pm1$~SE bars. The
-curve falls steeply until $H=\bestH$ and then flattens; the simplest model
-within one SE of the minimum is $H=\bestH$.}
+\caption{WAIC against the number of components $H$ with $\pm1$~SE bars.}
 \label{fig:waicH}
 \end{figure}
 
@@ -305,7 +288,7 @@ within one SE of the minimum is $H=\bestH$.}
 In a mixture the components are exchangeable: permuting their labels leaves
 the likelihood unchanged, so the posterior has up to $H!$ equivalent modes.
 When independent chains explore different permutations the raw parameter
-traces cross and swap --- \emph{label switching} --- and naively averaging
+traces cross and swap (\emph{label switching}) and naively averaging
 component parameters across draws blends different permutations. The trace
 plots and the per-component $\widehat R$ values (several well above the
 conventional $1.10$ threshold; Appendix~\ref{app:diag}) display exactly this
@@ -321,8 +304,8 @@ per-component summaries we apply a \textbf{post-hoc relabelling}: at every
 draw the $H$ components are sorted by their Beta mean
 $\mu_h=\alpha_h/(\alpha_h+\beta_h)$, so ``Component~1'' is consistently the
 lowest-mean (off-peak) regime and ``Component~3'' the highest-mean
-(near-peak) regime. This does not alter the fit --- the mixture density and
-WAIC are unchanged --- it only fixes the labels for interpretation.
+(near-peak) regime. This does not alter the fit (the mixture density and
+WAIC are unchanged) it only fixes the labels for interpretation.
 
 \subsection{Posterior summaries of the selected model}
 
@@ -332,8 +315,7 @@ credible intervals after relabelling.
 
 \begin{table}[H]
 \centering
-\caption{Posterior summaries of the $H=\bestH$ Beta mixture (posterior
-means; $95\%$ credible intervals for the shape parameters). Components are
+\caption{Posterior summaries of the $H=\bestH$ Beta mixture. Components are
 ordered by increasing mean.}
 \label{tab:comp}
 \begin{tabular}{clccccc}
@@ -341,21 +323,25 @@ ordered by increasing mean.}
 Comp. & Regime & $\pi_h$ & $\alpha_h$ & $\beta_h$ & $\mu_h$ &
 $\alpha_h$ CI\,/\,$\beta_h$ CI\\
 \midrule
-1 & off-peak / low   & \piA & \alA & \beA & \muA & $[29.4,\,52.1]$ / $[22.3,\,41.6]$\\
-2 & intermediate     & \piB & \alB & \beB & \muB & $[43.1,\,111.7]$ / $[14.8,\,36.9]$\\
-3 & near-peak / high & \piC & \alC & \beC & \muC & $[4.3,\,14.3]$ / $[0.5,\,0.8]$\\
+1 & off-peak / low   & \piA & \alA & \beA & \muA & $[39.39,\,50.79]$ / $[30.14,\,39.33]$\\
+2 & intermediate     & \piB & \alB & \beB & \muB & $[88.40,\,117.13]$ / $[30.00,\,39.44]$\\
+3 & near-peak / high & \piC & \alC & \beC & \muC & $[4.28,\,7.39]$ / $[0.49,\,0.60]$\\
 \bottomrule
 \end{tabular}
 \end{table}
 
-The three components admit a clean physical reading. Component~1
-($\mu\approx\muA$, weight $\approx\piA$) is the broad off-peak regime;
-Component~2 ($\mu\approx\muB$, weight $\approx\piB$) is the intermediate
-load regime and is the most concentrated (largest $\alpha$); Component~3
-($\mu\approx\muC$, weight $\approx\piC$) captures the sharp accumulation of
-mass near the daily peak --- its very small $\beta\approx\beC$ produces the
-strong left build-up towards $1$. The credible intervals are away from zero
+The three components admit a clean physical reading. Component~1 is the broad off-peak regime,
+Component~2 is the intermediate load regime and Component~3
+captures the sharp accumulation of
+mass near the daily peak. The credible intervals are away from zero
 for all shape parameters, confirming that each regime is well identified.
+
+\begin{figure}[H]
+\centering
+\fig[0.7\linewidth]{03_anatomy.png}
+\caption{Mixture anatomy}
+\label{fig:anatomy}
+\end{figure}
 
 \subsection{Posterior predictive check and mode recovery}
 
@@ -369,28 +355,17 @@ We average \emph{densities}, not parameters, so the curve propagates
 posterior uncertainty and is automatically invariant to label switching.
 Figure~\ref{fig:anatomy} overlays this density and its weighted components
 on the histogram; Figure~\ref{fig:ppd} marks its local maxima. The
-predictive modes fall at $\modeOne$ and $\modeTwo$, aligning with the
-visible peaks of the empirical distribution (the near-peak component
-contributes a shoulder rather than a separated mode because its mass piles
-against the upper boundary). The $H=\bestH$ mixture thus reproduces a
+predictive modes fall at $\modeOne$ and $\modeTwo$, aligned with the
+visible peaks of the empirical distribution. The $H=\bestH$ mixture thus reproduces a
 multimodal profile that a single Beta is structurally unable to capture.
 
-\begin{figure}[H]
+
+\begin{figure}
 \centering
-\begin{subfigure}{0.49\linewidth}\centering
-\fig{03_anatomy.png}
-\caption{Mixture anatomy: overall predictive density (solid) and weighted
-components (dashed).}
-\label{fig:anatomy}
-\end{subfigure}\hfill
-\begin{subfigure}{0.49\linewidth}\centering
-\fig{04_ppd_modes.png}
-\caption{Posterior predictive overlay with recovered modes at $\modeOne$ and
-$\modeTwo$.}
-\label{fig:ppd}
-\end{subfigure}
+\fig[0.7\linewidth]{04_ppd_modes.png}
 \caption{Posterior predictive density of the selected $H=\bestH$ model
 against the empirical histogram.}
+\label{fig:ppd}
 \end{figure}
 
 \subsection{Prior sensitivity analysis}
@@ -403,39 +378,32 @@ We refit the $H=\bestH$ model under four settings, varying one at a time
 
 \begin{table}[H]
 \centering
-\caption{Prior sensitivity for the $H=\bestH$ model. WAIC and effective
-complexity under four hyperparameter settings.}
+\caption{Prior sensitivity for the $H=\bestH$ model.}
 \label{tab:sens}
 \begin{tabular}{lccrrr}
 \toprule
-Setting & $\lambda$ & $c$ & ELPD & p\_eff & WAIC\\
+Setting & $\lambda$ & $c$\\
 \midrule
-Reference         & 0.10 & 1.0 & 283.5 & 6.2  & $-567.1$\\
-Very diffuse      & 0.01 & 1.0 & 284.5 & 7.3  & $-569.0$\\
-Informative       & 1.00 & 1.0 & 247.3 & 3.0  & $-494.7$\\
-Sparse Dirichlet  & 0.10 & 0.1 & 274.1 & 12.5 & $-548.2$\\
+Reference         & 0.10 & 1.0 \\
+Very diffuse      & 0.01 & 1.0 \\
+Informative       & 1.00 & 1.0 \\
+Sparse Dirichlet  & 0.10 & 0.1 \\
 \bottomrule
 \end{tabular}
 \end{table}
 
 The reference and the very diffuse priors give essentially identical WAIC
 and overlapping posterior predictive curves (Figure~\ref{fig:sens}),
-confirming that under weak priors the inference is data-driven. Two settings
-are informative enough to matter. The tight Exponential ($\lambda=1$, prior
-mean shape $=1$) pulls the shapes towards $1$, cannot represent the
-concentrated intermediate and near-peak regimes, and noticeably degrades
-predictive accuracy (WAIC $-494.7$, $p_{\mathrm{WAIC}}$ collapsing to $3$).
+confirming that under weak priors the inference is data-driven. 
 The sparse Dirichlet ($c=0.1$) encourages a single dominant component and
 also worsens the fit. The analysis therefore both validates the reference
-prior and shows where an over-confident prior would distort the result ---
-exactly the diagnostic value a sensitivity study should provide.
+prior and shows where an over-confident prior would distort the result.
 
 \begin{figure}[H]
 \centering
 \fig[0.7\linewidth]{05_sensitivity.png}
 \caption{Posterior predictive density of the $H=\bestH$ model under the four
-prior settings of Table~\ref{tab:sens}. The reference and very-diffuse
-curves coincide; the informative-shape and sparse-Dirichlet priors depart.}
+prior settings of Table~\ref{tab:sens}.}
 \label{fig:sens}
 \end{figure}
 
@@ -459,19 +427,16 @@ observations in each component against \texttt{hour}
 (Figure~\ref{fig:byhour}) reveals a strong, smooth diurnal cycle: the
 low-mean (off-peak) component dominates at night, the intermediate component
 prevails through the working day, and the high-mean (near-peak) component
-concentrates around the daily peak hours. The latent structure recovered
-\emph{unsupervised} from the load factor is thus tightly organised by the
-hour of the day --- a substantive validation that the components correspond
+concentrates around the daily peak hours; a substantive validation that the components correspond
 to real operating regimes rather than statistical artefacts.
 
 \begin{figure}[H]
 \centering
-\fig[0.7\linewidth]{06_byhour.png}
-\caption{Empirical fraction of observations in each MAP component as a
-function of \texttt{hour}. Off-peak (Comp.~1) dominates at night,
-intermediate (Comp.~2) during the day, near-peak (Comp.~3) around the daily
-peak.}
-\label{fig:byhour}
+\fig[0.48\linewidth]{06_byhour.png}
+\hfill % Spazio orizzontale tra le due immagini
+\fig[0.48\linewidth]{06_byhour_bis.png}
+\caption{Empirical fraction of observations in each MAP component as a function of \texttt{hour}.}
+\label{fig:byhour_affiancate}
 \end{figure}
 
 % ==================================================================
@@ -581,10 +546,10 @@ genuinely predictive covariate of the load regime.
 dividing each day by its own peak, which removes day-level scale; a
 hierarchical extension could model day- and season-level variation jointly.
 The number of components could be estimated rather than selected, e.g.\ with
-a Dirichlet-process mixture. Finally, the figures here use a $\Nfit$-row
-exploratory run; the final version will be regenerated on the full
-$n=\Nfull$ sample with more chains and iterations, which we expect to
-sharpen the credible intervals without changing the qualitative conclusions.
+a Dirichlet-process mixture. The results reported here are based on the full
+$n=\Nfull$ sample with $\nchains$ chains and $\niter$ retained iterations per
+chain; a still longer run would only sharpen the credible intervals without
+changing the qualitative conclusions.
 
 % ==================================================================
 \appendix
@@ -611,9 +576,9 @@ non-convergence (cf.\ the invariant-scale $\widehat R=\rhatlik$).}
 \toprule
 Par. & $\widehat R$ & Par. & $\widehat R$ & Par. & $\widehat R$\\
 \midrule
-$\alpha_1$ & 7.48 & $\beta_1$ & 9.46 & $\pi_1$ & 4.86\\
-$\alpha_2$ & 1.59 & $\beta_2$ & 1.60 & $\pi_2$ & 1.23\\
-$\alpha_3$ & 10.04 & $\beta_3$ & 12.01 & $\pi_3$ & 3.91\\
+$\alpha_1$ & 17.22 & $\beta_1$ & 18.87 & $\pi_1$ & 5.93\\
+$\alpha_2$ & 19.65 & $\beta_2$ & 20.73 & $\pi_2$ & 5.78\\
+$\alpha_3$ & 8.30 & $\beta_3$ & 1.17 & $\pi_3$ & 1.02\\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -628,9 +593,9 @@ parameters, showing the label-switching signature.}
 
 \textbf{Selection of the number of harmonics.} Table~\ref{tab:waicK} reports
 WAIC for the multinomial logit over $K=1,\dots,5$ harmonics. WAIC improves
-through $K=5$, but $K=\bestK$ is already within one SE of the minimum
-($\Delta\mathrm{elpd}=-2.3$, se\_diff $4.5$), so the parsimonious choice is
-$K=\bestK$.
+through $K=5$, but $K=\bestK$ already lies within one standard error of the
+minimum (its WAIC $1071.8$ against $1031.8$ at $K=5$, well inside the
+$\mathrm{SE}\approx 56$), so the parsimonious choice is $K=\bestK$.
 
 \begin{table}[H]
 \centering
@@ -640,14 +605,13 @@ $K=\bestK$.
 \toprule
 Model & ELPD & p\_eff & WAIC & SE & $\Delta$elpd & se\_diff\\
 \midrule
-$K=1$ & $-142.6$ & 8.7 & 285.2 & 33.3 & $-30.4$ & 10.2\\
-$K=2$ & $-131.9$ & 13.7 & 263.8 & 38.6 & $-19.7$ & 11.3\\
-$K=\mathbf{3}$ & $-114.5$ & 13.0 & 229.0 & 28.0 & $-2.3$ & 4.5\\
-$K=4$ & $-113.7$ & 15.2 & 227.4 & 28.7 & $-1.5$ & 3.4\\
-$K=5$ & $-112.2$ & 16.8 & 224.4 & 27.9 & 0.0 & 0.0\\
+$K=1$ & $-678.0$ & 9.5 & 1356.1 & 80.7 & $-162.1$ & 23.5\\
+$K=2$ & $-608.2$ & 14.4 & 1216.4 & 71.2 & $-92.3$ & 16.6\\
+$K=\mathbf{3}$ & $\mathbf{-535.9}$ & 13.8 & $\mathbf{1071.8}$ & 57.8 & $-20.0$ & 6.9\\
+$K=4$ & $-516.1$ & 16.4 & 1032.2 & 54.9 & $-0.2$ & 2.8\\
+$K=5$ & $-515.9$ & 18.8 & 1031.8 & 55.7 & 0.0 & 0.0\\
 \bottomrule
 \end{tabular}
 \end{table}
 
 \end{document}
->>>>>>> Stashed changes
