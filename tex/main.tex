@@ -1,4 +1,4 @@
-\documentclass[11pt,a4paper]{article}
+\documentclass{article}
 
 % ------------------------------------------------------------------
 % Bayesian Learning and Monte Carlo Simulations -- Final Project 2026
@@ -31,7 +31,7 @@
   \IfFileExists{figures/#2}%
     {\includegraphics[width=#1]{figures/#2}}%
     {\fbox{\parbox[c][3.4cm][c]{0.95\linewidth}{\centering\ttfamily
-       figures/#2\\[2pt]\normalfont\small(export this plot from the R notebook)}}}%
+       figures/#2\\[2pt]\normalfont\small}}}%
 }
 
 % ==================================================================
@@ -81,32 +81,27 @@
 \newcommand{\accbase}{0.384}
 % ==================================================================
 
-\title{\textbf{Bayesian Analysis of the Hourly City Load Factor}\\[4pt]
-\large Beta mixture modelling, latent structure and time-of-day prediction\\
-\normalsize Bayesian Learning and Monte Carlo Simulations --- Final Project 2026 (Dataset 11)}
-\author{}
-\date{\today}
 
 \begin{document}
-\maketitle
-
-\begin{abstract}
-\noindent
-We model the distribution of the \emph{hourly city load factor} of Tetouan
-(Morocco) --- the ratio between the average electrical load in a given hour
-and the daily peak load --- as a finite mixture of Beta densities estimated
-by MCMC in JAGS. Model selection by WAIC over $H=1,\dots,5$ components
-selects $H=\bestH$, which recovers the multimodal shape of the empirical
-distribution that a single Beta cannot reproduce. We resolve the
-label-switching that affects mixture posteriors, report identifiable
-per-component summaries with $95\%$ credible intervals, and confirm
-robustness through a prior sensitivity analysis. We then link the latent
-load regimes to the time of day: a maximum-a-posteriori (MAP) cluster
-assignment shows a clear diurnal pattern, and a multinomial logistic
-regression on a Fourier expansion of \texttt{hour} reproduces it smoothly.
-An out-of-sample exercise confirms that the hour of the day is a genuinely
-predictive covariate of the load regime.
-\end{abstract}
+\begin{titlepage}
+    \centering
+    {\scshape\large AY 2025/2026 \par}
+    \vfill
+    \includegraphics[width=100pt]{tex/figures/logo-polimi.pdf}\par\vspace{1cm}
+    {\scshape\LARGE Politecnico di Milano \par}
+    \vspace{1.5cm}
+    {\huge\bfseries Bayesian Analysis of the Hourly City Load Factor\par}
+    \vspace{2cm}
+    {\large {Filippo Maretti\quad Davide Martini\par Manuel Maiuolo\quad Adriano Claudio Mangoni}
+    \vfill
+    \vfill
+    {\large}}
+\end{titlepage}
+\clearpage
+\tableofcontents
+\pagenumbering{gobble}
+\clearpage
+\pagenumbering{arabic}
 
 % ==================================================================
 \section{Data and problem description}
@@ -152,9 +147,7 @@ fractions and validating it out of sample.
 \begin{figure}[H]
 \centering
 \fig[0.7\linewidth]{01_hist.png}
-\caption{Empirical density of the hourly load factor ($n=\Nfull$). The
-bounded, right-skewed and multimodal profile motivates a Beta-mixture
-likelihood.}
+\caption{Empirical density of the hourly load factor ($n=\Nfull$).}
 \label{fig:hist}
 \end{figure}
 
