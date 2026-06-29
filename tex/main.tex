@@ -445,10 +445,10 @@ r_{ih}=\frac1S\sum_{s=1}^S
 where $(h)$ denotes the $h$-th component by increasing mean, which keeps the
 assignment stable across chains. Plotting the empirical fraction of
 observations in each component against \texttt{hour}
-(Figure~\ref{fig:byhour}) reveals a strong, smooth diurnal cycle: the
-low-mean (off-peak) component dominates at night, the intermediate component
+(Figure~\ref{fig:byhour_affiancate}) reveals a strong, smooth diurnal cycle: the
+low-mean (off-peak) component dominates at deep night, the intermediate component
 prevails through the working day, and the high-mean (near-peak) component
-concentrates around the daily peak hours; a substantive validation that the components correspond
+concentrates around the daily peak hours in the evening; a substantive validation that the components correspond
 to real operating regimes rather than statistical artefacts.
 
 \begin{figure}[H]
@@ -540,7 +540,7 @@ The model more than halves the log-loss ($\logloss$ vs $\loglossbase$) and
 raises accuracy from $\accbase$ to $\acc$. Knowing the time of day therefore
 substantially improves the prediction of the load regime over the
 unconditional frequencies, and the periodic pattern learned on $80\%$ of the
-data reproduces the full-data fractions --- evidence that it is a structural
+data reproduces the full-data fractions evidence that it is a structural
 feature of city load, not an artefact of the particular training split.
 
 % ==================================================================
@@ -557,8 +557,8 @@ permutation-invariant scale ($\widehat R=\rhatlik$) and relabelling
 components by their mean, allowing identifiable per-component summaries with
 credible intervals. A prior sensitivity analysis confirmed that the
 conclusions are data-driven under weak priors. Linking the latent regimes to
-the hour of the day --- first by MAP exploration, then by a Fourier-based
-multinomial logit selected by WAIC --- showed a strong, smooth diurnal
+the hour of the day first by MAP exploration, then by a Fourier-based
+multinomial logit selected by WAIC showed a strong, smooth diurnal
 cycle, and an out-of-sample exercise confirmed that \texttt{hour} is a
 genuinely predictive covariate of the load regime.
 
@@ -580,8 +580,8 @@ changing the qualitative conclusions.
 
 \textbf{Convergence.} Figure~\ref{fig:trace} shows trace plots for the
 component parameters of the $H=\bestH$ model. The chains run on separate
-tracks that occasionally cross --- the characteristic label-switching
-pattern --- and the corresponding raw per-component $\widehat R$ values
+tracks that occasionally cross (the characteristic label-switching
+pattern) and the corresponding raw per-component $\widehat R$ values
 exceed $1.10$ (Table~\ref{tab:rhat}). Evaluated on the permutation-invariant
 marginal log-likelihood, however, $\widehat R=\rhatlik$ and
 ESS$\,\approx\esslik$, confirming global convergence;
@@ -633,5 +633,58 @@ $K=5$  & 1031.8 & 55.7 \\
 \bottomrule
 \end{tabular}
 \end{table}
+
+\newpage
+% ==================================================================
+\section{Seasonal variation of load regimes}
+\label{app:seas}
+% ==================================================================
+
+This appendix investigates whether the three-regime structure of the hourly load factor and its corresponding diurnal cycle is stable across meteorological seasons, or if the weight and timing of the regimes shift throughout the year.
+
+\subsection{Methodological stipulations and Grouping}
+Before interpreting the seasonal distributions, two critical constraints regarding the dataset and the context must be established:
+\begin{itemize}
+    \item \textbf{Scale normalisation:} The load factor is strictly normalised day-by-day against its own peak. Consequently, seasonal differences observed here do not reflect changes in the absolute volume of electricity consumption (e.g., higher baseline loads in summer due to cooling). They exclusively reflect changes in the \textit{shape} of the daily load curve.
+    \item \textbf{The Ramadan confounder:} In Morocco, the daily activity pattern shifts significantly during the holy month of Ramadan, with substantial activity moving to the evening and night. In 2017, Ramadan occurred between May 27 and June 24. To prevent this cultural shift from contaminating the summer data, observations falling within this window were isolated into a dedicated ``Ramadan 2017'' group.
+\end{itemize}
+We project the global $H=3$ fit and its mean-ordered maximum a posteriori (MAP) component assignments ($\hat{z}_i$) onto the partitioned dataset, allowing us to evaluate the stability of the global regimes.
+
+\subsection{Empirical Density by Season}
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.8\textwidth]{tex/figures/09_bySeason.png}
+    \caption{Empirical density of the load factor grouped by meteorological season, with the Ramadan window isolated.}
+    \label{fig:season_density}
+\end{figure}
+
+As shown in Figure~\ref{fig:season_density}, the bounded, multimodal shape that motivated the Beta mixture persists across all seasonal subsets. While the relative mass between the off-peak bulk and the near-peak bulge fluctuates, the overarching structural regimes remain consistent, confirming that the global $H=3$ parameterisation is robust across the year. 
+\newpage
+\subsection{Diurnal Shifts and the Ramadan Effect}
+
+To assess temporal shifts, we plotted the empirical fraction of observations assigned to each component as a function of the hour, faceted by season.
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=\textwidth]{tex/figures/10_mapBySeason.png}
+    \caption{Empirical fraction of observations in each MAP component by hour of the day, faceted by season.}
+    \label{fig:season_diurnal}
+\end{figure}
+
+The diurnal progression (off-peak $\to$ intermediate $\to$ near-peak) is visible in every season. However, there are notable horizontal shifts in the timing of these transitions. The near-peak regime expands or contracts depending on the season, tracking the availability of daylight and corresponding evening demand shifts. 
+
+The necessity of isolating Ramadan is starkly evident when comparing the Ramadan window against the non-Ramadan summer days (Figure~\ref{fig:ramadan_comparison}). 
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.75\textwidth]{tex/figures/11_summerRamadan.png}
+    \caption{Comparison of the near-peak regime timing between the Ramadan window and the rest of the meteorological summer.}
+    \label{fig:ramadan_comparison}
+\end{figure}
+
+The near-peak load curve is visibly shifted during Ramadan, highlighting a delayed and concentrated evening peak compared to standard summer days. If this window had been blindly aggregated into the Summer classification, the resulting curve would have been artificially smoothed, conflating a cultural behavioural shift with a meteorological one. 
+
+Overall, this descriptive analysis confirms that while the fundamental shapes of the load regimes are stable, their timing is highly sensitive to both seasonal daylight availability and specific cultural events.
 
 \end{document}
