@@ -89,14 +89,14 @@ $$f(x; \boldsymbol{\pi}, \boldsymbol{\alpha}, \boldsymbol{\beta}) = \sum_{h=1}^H
 
 ### Constraints and Parameters
 
-- **Mixture Weights** ($\pi_h$): Represent the probability of a data
-  point belonging to component $h$. They must satisfy the following
-  conditions:
-  $$\sum_{h=1}^H \pi_h = 1 \quad \text{and} \quad \pi_h \ge 0 \quad \forall h \in \{1, \dots, H\}$$
-- **Shape Parameters** ($\alpha_h, \beta_h$): Govern the geometry of
-  each individual Beta density within the mixture. They must be strictly
-  positive:
-  $$\alpha_h > 0, \quad \beta_h > 0 \quad \forall h \in \{1, \dots, H\}$$
+-   **Mixture Weights** ($\pi_h$): Represent the probability of a data
+    point belonging to component $h$. They must satisfy the following
+    conditions:
+    $$\sum_{h=1}^H \pi_h = 1 \quad \text{and} \quad \pi_h \ge 0 \quad \forall h \in \{1, \dots, H\}$$
+-   **Shape Parameters** ($\alpha_h, \beta_h$): Govern the geometry of
+    each individual Beta density within the mixture. They must be
+    strictly positive:
+    $$\alpha_h > 0, \quad \beta_h > 0 \quad \forall h \in \{1, \dots, H\}$$
 
 ### Component Density Function
 
@@ -121,10 +121,10 @@ $$\text{WAIC} = -2 \cdot (\text{lppd} - p_{\text{WAIC}})$$
 
 Where:
 
-- $\text{lppd}$ is the **log pointwise predictive density**, which
-  measures how well the model fits the observed data.
-- $p_{\text{WAIC}}$ is the **effective number of parameters**, acting as
-  a penalty for model complexity to prevent overfitting.
+-   $\text{lppd}$ is the **log pointwise predictive density**, which
+    measures how well the model fits the observed data.
+-   $p_{\text{WAIC}}$ is the **effective number of parameters**, acting
+    as a penalty for model complexity to prevent overfitting.
 
 ## JAGS Model
 
@@ -158,20 +158,20 @@ We define the model hierarchically as follows:
 To complete the Bayesian setup, we must specify prior distributions for
 all unknown parameters:
 
-- **For the weights** ($\boldsymbol{\pi}$): We use a symmetric
-  **Dirichlet distribution**, which is the natural conjugate prior for
-  categorical probabilities that must sum to 1:
-  $$\boldsymbol{\pi} \sim \text{Dirichlet}(\mathbf{1}_H)$$Where
-  $\mathbf{1}_H = [1, 1, \dots, 1]$ of length $H$. This represents a
-  flat, uninformative uniform prior over the probability simplex.
+-   **For the weights** ($\boldsymbol{\pi}$): We use a symmetric
+    **Dirichlet distribution**, which is the natural conjugate prior for
+    categorical probabilities that must sum to 1:
+    $$\boldsymbol{\pi} \sim \text{Dirichlet}(\mathbf{1}_H)$$Where
+    $\mathbf{1}_H = [1, 1, \dots, 1]$ of length $H$. This represents a
+    flat, uninformative uniform prior over the probability simplex.
 
-- **For the shape parameters** ($\alpha_h, \beta_h$): Since these
-  parameters must be strictly positive, we assign an **Exponential
-  distribution** with a small rate parameter $\lambda$:
-  $$\alpha_h \sim \text{Exponential}(\lambda), \quad \beta_h \sim \text{Exponential}(\lambda) \quad \forall h \in \{1, \dots, H\}$$Setting
-  $\lambda = 0.1$ ensures the prior is highly diffuse (weak), allowing
-  the data to fully drive the posterior estimation. (Later will be
-  verified through sensitivity analysis)
+-   **For the shape parameters** ($\alpha_h, \beta_h$): Since these
+    parameters must be strictly positive, we assign an **Exponential
+    distribution** with a small rate parameter $\lambda$:
+    $$\alpha_h \sim \text{Exponential}(\lambda), \quad \beta_h \sim \text{Exponential}(\lambda) \quad \forall h \in \{1, \dots, H\}$$Setting
+    $\lambda = 0.1$ ensures the prior is highly diffuse (weak), allowing
+    the data to fully drive the posterior estimation. (Later will be
+    verified through sensitivity analysis)
 
 ## Code
 
@@ -226,18 +226,18 @@ version for the remaining cases.
 The following code specifies the likelihood and priors so that JAGS can
 run MCMC simulations and estimate the posterior distribution.
 
-- The likelihood is a Beta mixture model.\
-  We introduce a latent categorical indicator $Z_i$ to assign each
-  observation $X_i$ to one of the $H$ components.
+-   The likelihood is a Beta mixture model.\
+    We introduce a latent categorical indicator $Z_i$ to assign each
+    observation $X_i$ to one of the $H$ components.
 
-- We assign weakly informative priors to all unknown parameters. In
-  particular, we place a symmetric Dirichlet prior on the mixture
-  weights $\boldsymbol{\pi}$ so that they sum to 1.
+-   We assign weakly informative priors to all unknown parameters. In
+    particular, we place a symmetric Dirichlet prior on the mixture
+    weights $\boldsymbol{\pi}$ so that they sum to 1.
 
-- For the shape parameters $\alpha_h$ and $\beta_h$, we use Exponential
-  priors with a small rate parameter ($\lambda = 0.1$). This keeps the
-  parameters strictly positive while leaving the prior diffuse and
-  weakly informative.
+-   For the shape parameters $\alpha_h$ and $\beta_h$, we use
+    Exponential priors with a small rate parameter ($\lambda = 0.1$).
+    This keeps the parameters strictly positive while leaving the prior
+    diffuse and weakly informative.
 
 ```{r}
 # Model with H=1
@@ -278,14 +278,11 @@ model {
 
 For a mixture model, WAIC must be computed from the **marginal**
 likelihood of each observation, integrating out the latent $z$:
-$$\log p(x_i \mid \theta^{(s)}) = \log \sum_{h=1}^H \pi_h^{(s)}\,\text{Beta}(x_i \mid \alpha_h^{(s)}, \beta_h^{(s)}).$$Using
-instead the log-density conditional on the sampled $z_i$
-($\log\text{Beta}(x_i\mid\alpha_{z_i},\beta_{z_i})$) answers a different
-predictive question, inflates $p_{\text{WAIC}}$, and tends to favour too
-many components. We compute `log_lik[i]` **inside JAGS** with the
-numerically stable log-sum-exp trick and monitor it. As a further
-advantage, the marginal density is invariant to label permutations, so
-this WAIC is immune to label switching.
+$$\log p(x_i \mid \theta^{(s)}) = \log \sum_{h=1}^H \pi_h^{(s)}\,\text{Beta}(x_i \mid \alpha_h^{(s)}, \beta_h^{(s)}).$$We
+compute `log_lik[i]` **inside JAGS** with the numerically stable
+log-sum-exp trick and monitor it. As a further advantage, the marginal
+density is invariant to label permutations, so this WAIC is immune to
+label switching.
 
 ```{r}
 # Reshape MCMC log-likelihood array (chains x iterations x data_points) to matrix (samples x data_points)
@@ -339,19 +336,20 @@ defined in the configuration block above (`N_CHAINS`, `N_BURNIN`,
 `N_SAMPLES`); to change any of them it is enough to edit that single
 block. We use the following values for the reasons below:
 
-- **Chains** (`N_CHAINS = 2`)\
-  This choice helps reduce the risk that the Markov chains become
-  trapped near a local mode, which could lead to biased estimates. Using
-  two JAGS chains with different initial values increases the chance of
-  obtaining a more reliable exploration of the posterior distribution.
-  In a final analysis, we would ideally use 3 or 4 chains.
+-   **Chains** (`N_CHAINS = 2`)\
+    This choice helps reduce the risk that the Markov chains become
+    trapped near a local mode, which could lead to biased estimates.
+    Using two JAGS chains with different initial values increases the
+    chance of obtaining a more reliable exploration of the posterior
+    distribution. In a final analysis, we would ideally use 3 or 4
+    chains.
 
-- **Burn-in** (`N_BURNIN = 1000`)\
-  This is a standard burn-in period, used to allow the chains to move
-  away from their initial values before samples are retained for
-  inference.
+-   **Burn-in** (`N_BURNIN = 1000`)\
+    This is a standard burn-in period, used to allow the chains to move
+    away from their initial values before samples are retained for
+    inference.
 
-- **Iterations** (`N_SAMPLES = 2000`)
+-   **Iterations** (`N_SAMPLES = 2000`)
 
 We wrap the fitting logic in a single `fit_mixture(H)` helper (the
 $H = 1$ case uses the single-Beta model, $H > 1$ the mixture model) and
@@ -738,11 +736,11 @@ threshold, formally confirm this instability.
 
 At this point two explanations are possible:
 
-- the chains genuinely failed to mix and explore the posterior
+-   the chains genuinely failed to mix and explore the posterior
 
-- the high $\hat{R}$ is a statistical artifact caused by the chains
-  sampling from different, but equivalent, label permutations of a
-  well-mixed sampler.
+-   the high $\hat{R}$ is a statistical artifact caused by the chains
+    sampling from different, but equivalent, label permutations of a
+    well-mixed sampler.
 
 To distinguish between the two explanations, we evaluate $\hat{R}$ and
 the Effective Sample Size (ESS) on the **marginal log-likelihood**
