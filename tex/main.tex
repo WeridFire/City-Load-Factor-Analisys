@@ -536,8 +536,7 @@ Accuracy (higher better) & \acc & \accbase\\
 \end{tabular}
 \end{table}
 
-The model more than halves the log-loss ($\logloss$ vs $\loglossbase$) and
-raises accuracy from $\accbase$ to $\acc$. Knowing the time of day therefore
+Knowing the time of day therefore
 substantially improves the prediction of the load regime over the
 unconditional frequencies, and the periodic pattern learned on $80\%$ of the
 data reproduces the full-data fractions evidence that it is a structural
@@ -673,15 +672,6 @@ To assess temporal shifts, we plotted the empirical fraction of observations ass
 \end{figure}
 
 The diurnal progression (off-peak $\to$ intermediate $\to$ near-peak) is visible in every season. However, there are notable horizontal shifts in the timing of these transitions. The near-peak regime expands or contracts depending on the season, tracking the availability of daylight and corresponding evening demand shifts. 
-
-The necessity of isolating Ramadan is starkly evident when comparing the Ramadan window against the non-Ramadan summer days (Figure~\ref{fig:ramadan_comparison}). 
-
-\begin{figure}[htbp]
-    \centering
-    \includegraphics[width=0.75\textwidth]{tex/figures/11_summerRamadan.png}
-    \caption{Comparison of the near-peak regime timing between the Ramadan window and the rest of the meteorological summer.}
-    \label{fig:ramadan_comparison}
-\end{figure}
 
 The near-peak load curve is visibly shifted during Ramadan, highlighting a delayed and concentrated evening peak compared to standard summer days. If this window had been blindly aggregated into the Summer classification, the resulting curve would have been artificially smoothed, conflating a cultural behavioural shift with a meteorological one. 
 
